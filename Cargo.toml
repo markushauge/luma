@@ -1,0 +1,12 @@
+[package]
+name = "lys"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.99"
+ash = "0.38.0"
+ash-window = "0.13.0"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.20"
+winit = "0.30.9"
