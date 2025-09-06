@@ -75,7 +75,7 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(WindowState { window, device }) = self.window_state.as_ref() else {
+        let Some(WindowState { window, device }) = self.window_state.as_mut() else {
             return;
         };
 
@@ -116,6 +116,7 @@ struct Device {
     compute_descriptor_set_layout: vk::DescriptorSetLayout,
     compute_descriptor_pool: vk::DescriptorPool,
     compute_descriptor_set: vk::DescriptorSet,
+    frame_count: i32,
 }
 
 impl Device {
@@ -486,11 +487,12 @@ impl Device {
                 compute_descriptor_set_layout,
                 compute_descriptor_pool,
                 compute_descriptor_set,
+                frame_count: 0,
             })
         }
     }
 
-    fn render(&self) -> Result<()> {
+    fn render(&mut self) -> Result<()> {
         unsafe {
             self.device
                 .wait_for_fences(&[self.command_buffer_fence], true, u64::MAX)?;
@@ -544,6 +546,7 @@ impl Device {
             let push_constants = PushConstants {
                 width: extent.width as i32,
                 height: extent.height as i32,
+                frame_count: self.frame_count,
             };
 
             self.device.cmd_push_constants(
@@ -647,6 +650,8 @@ impl Device {
             self.device
                 .wait_for_fences(&[self.command_buffer_fence], true, u64::MAX)?;
 
+            self.frame_count += 1;
+
             Ok(())
         }
     }
@@ -692,4 +697,5 @@ impl Device {
 struct PushConstants {
     width: i32,
     height: i32,
+    frame_count: i32,
 }
