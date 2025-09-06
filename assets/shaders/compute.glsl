@@ -16,6 +16,23 @@ const float MAX_DISTANCE = 1000.0;
 const vec3 SKY_COLOR = vec3(0.6, 0.8, 1.0);
 const vec3 AMBIENT_LIGHT = vec3(0.1);
 
+struct Camera {
+    vec3 position;
+    mat3 rotation;
+    float fov;
+};
+
+mat3 cameraLookAt(vec3 eye, vec3 target, vec3 up) {
+    vec3 f = normalize(target - eye);
+    vec3 r = normalize(cross(f, up));
+    vec3 u = cross(r, f);
+    return mat3(r, u, f);
+}
+
+float focalLengthToRadians(float focalLength) {
+    return 2.0 * atan(24.0 / (2.0 * focalLength));
+}
+
 struct HitInfo {
     float t;
     vec3 position;
@@ -79,8 +96,16 @@ void main() {
     vec2 ndc = uv * 2.0 - 1.0;
     ndc.x *= float(pc.width) / float(pc.height);
 
-    vec3 rayOrigin = vec3(0.0, 0.0, -2.0);
-    vec3 rayDirection = normalize(vec3(ndc, 1.0));
+    Camera camera;
+    camera.position = vec3(0.0, 0.0, -10.0);
+    camera.rotation = cameraLookAt(camera.position, vec3(0.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0));
+    camera.fov = focalLengthToRadians(35.0); // 35mm focal length
+
+    float tanHalfFov = tan(camera.fov * 0.5);
+    vec3 cameraDirection = normalize(vec3(ndc.x * tanHalfFov, ndc.y * tanHalfFov, 1.0));
+
+    vec3 rayOrigin = camera.position;
+    vec3 rayDirection = normalize(camera.rotation * cameraDirection);
 
     HitInfo hit = raymarch(rayOrigin, rayDirection);
     vec3 color = SKY_COLOR;
