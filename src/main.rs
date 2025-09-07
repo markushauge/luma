@@ -129,13 +129,16 @@ impl Device {
                 .map(CStr::as_ptr)
                 .collect::<Vec<_>>();
 
-            let mut instance_extensions = [
-                khr::portability_enumeration::NAME,
-                khr::get_physical_device_properties2::NAME,
-            ]
-            .into_iter()
-            .map(CStr::as_ptr)
-            .collect::<Vec<_>>();
+            let mut instance_extensions = vec![khr::get_physical_device_properties2::NAME];
+
+            if cfg!(target_os = "macos") {
+                instance_extensions.push(khr::portability_enumeration::NAME);
+            }
+
+            let mut instance_extensions = instance_extensions
+                .into_iter()
+                .map(CStr::as_ptr)
+                .collect::<Vec<_>>();
 
             let window_handle = window.window_handle()?.as_raw();
             let display_handle = window.display_handle()?.as_raw();
@@ -144,11 +147,17 @@ impl Device {
 
             let application_info = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
 
+            let mut instance_create_flags = vk::InstanceCreateFlags::empty();
+
+            if cfg!(target_os = "macos") {
+                instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
+            }
+
             let instance_create_info = vk::InstanceCreateInfo::default()
                 .application_info(&application_info)
                 .enabled_layer_names(&instance_layers)
                 .enabled_extension_names(&instance_extensions)
-                .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
+                .flags(instance_create_flags);
 
             let instance = entry.create_instance(&instance_create_info, None)?;
 
@@ -193,14 +202,16 @@ impl Device {
                 .queue_family_index(queue_family_index)
                 .queue_priorities(&[1.0]);
 
-            let device_extensions = [
-                khr::swapchain::NAME,
-                khr::portability_subset::NAME,
-                khr::dynamic_rendering::NAME,
-            ]
-            .into_iter()
-            .map(CStr::as_ptr)
-            .collect::<Vec<_>>();
+            let mut device_extensions = vec![khr::swapchain::NAME, khr::dynamic_rendering::NAME];
+
+            if cfg!(target_os = "macos") {
+                device_extensions.push(khr::portability_subset::NAME);
+            }
+
+            let device_extensions = device_extensions
+                .into_iter()
+                .map(CStr::as_ptr)
+                .collect::<Vec<_>>();
 
             let mut dynamic_rendering_features =
                 vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
