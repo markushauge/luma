@@ -1,5 +1,7 @@
 #version 460
 
+#include <camera>
+
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0, rgba8) uniform writeonly image2D img;
@@ -15,23 +17,6 @@ const int MAX_STEPS = 1000;
 const float MAX_DISTANCE = 1000.0;
 const vec3 SKY_COLOR = vec3(0.6, 0.8, 1.0);
 const vec3 AMBIENT_LIGHT = vec3(0.1);
-
-struct Camera {
-    vec3 position;
-    mat3 rotation;
-    float fov;
-};
-
-mat3 cameraLookAt(vec3 eye, vec3 target, vec3 up) {
-    vec3 f = normalize(target - eye);
-    vec3 r = normalize(cross(f, up));
-    vec3 u = cross(r, f);
-    return mat3(r, u, f);
-}
-
-float focalLengthToRadians(float focalLength) {
-    return 2.0 * atan(24.0 / (2.0 * focalLength));
-}
 
 struct HitInfo {
     float t;

@@ -1,3 +1,5 @@
+mod asset;
+
 use std::ffi::CStr;
 
 use anyhow::Result;
@@ -369,20 +371,11 @@ impl Device {
                 });
 
             let storage_image_view = device.create_image_view(&storage_image_view_info, None)?;
-            let glsl_source = std::fs::read_to_string("assets/shaders/compute.glsl")?;
-            let compiler = shaderc::Compiler::new()?;
 
-            let compiled_spirv = compiler.compile_into_spirv(
-                &glsl_source,
-                shaderc::ShaderKind::Compute,
-                "compute.glsl",
-                "main",
-                None,
-            )?;
-
-            let shader_code = compiled_spirv.as_binary();
-
-            let shader_module_create_info = vk::ShaderModuleCreateInfo::default().code(shader_code);
+            let shader_compiler = asset::ShaderCompiler::new()?;
+            let shader_code = shader_compiler.compile_file("assets/shaders/main.comp")?;
+            let shader_module_create_info =
+                vk::ShaderModuleCreateInfo::default().code(&shader_code);
 
             let compute_shader_module =
                 device.create_shader_module(&shader_module_create_info, None)?;
