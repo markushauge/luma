@@ -11,6 +11,7 @@ mat3 cameraLookAt(vec3 eye, vec3 target, vec3 up) {
     return mat3(r, u, f);
 }
 
-float focalLengthToRadians(float focalLength) {
+// Converts a full frame (36x24mm) focal length to a vertical field of view in radians
+float focalLengthToVerticalFov(float focalLength) {
     return 2.0 * atan(24.0 / (2.0 * focalLength));
 }
