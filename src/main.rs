@@ -1,6 +1,6 @@
 mod asset;
 
-use std::ffi::CStr;
+use std::{ffi::CStr, time::Instant};
 
 use anyhow::Result;
 use ash::{khr, vk};
@@ -118,7 +118,7 @@ struct Device {
     compute_descriptor_set_layout: vk::DescriptorSetLayout,
     compute_descriptor_pool: vk::DescriptorPool,
     compute_descriptor_set: vk::DescriptorSet,
-    frame_count: i32,
+    start_time: Instant,
 }
 
 impl Device {
@@ -465,6 +465,8 @@ impl Device {
 
             device.update_descriptor_sets(&[write_descriptor_set], &[]);
 
+            let start_time = Instant::now();
+
             Ok(Self {
                 entry,
                 instance,
@@ -491,7 +493,7 @@ impl Device {
                 compute_descriptor_set_layout,
                 compute_descriptor_pool,
                 compute_descriptor_set,
-                frame_count: 0,
+                start_time,
             })
         }
     }
@@ -546,11 +548,12 @@ impl Device {
             );
 
             let extent = self.storage_image_extent;
+            let time_millis = Instant::now().duration_since(self.start_time).as_millis() as u32;
 
             let push_constants = PushConstants {
-                width: extent.width as i32,
-                height: extent.height as i32,
-                frame_count: self.frame_count,
+                width: extent.width,
+                height: extent.height,
+                time_millis,
             };
 
             self.device.cmd_push_constants(
@@ -654,8 +657,6 @@ impl Device {
             self.device
                 .wait_for_fences(&[self.command_buffer_fence], true, u64::MAX)?;
 
-            self.frame_count += 1;
-
             Ok(())
         }
     }
@@ -699,7 +700,7 @@ impl Device {
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 struct PushConstants {
-    width: i32,
-    height: i32,
-    frame_count: i32,
+    width: u32,
+    height: u32,
+    time_millis: u32,
 }
