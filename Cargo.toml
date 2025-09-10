@@ -20,5 +20,5 @@ tracing = "0.1.41"
 
 [dependencies.bevy]
 default-features = false
-features = ["bevy_log", "bevy_window", "bevy_winit"]
+features = ["bevy_asset", "bevy_log", "bevy_state", "bevy_window", "bevy_winit"]
 version = "0.16.1"

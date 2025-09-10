@@ -8,24 +8,59 @@ use bevy::{
 };
 use bytemuck::{Pod, Zeroable};
 
-use crate::asset;
+use crate::shader::{Shader, ShaderPlugin};
+
+#[derive(Resource)]
+struct ComputeShader(Handle<Shader>);
+
+#[derive(States, Default, Debug, Hash, PartialEq, Eq, Clone)]
+enum RendererState {
+    #[default]
+    Loading,
+    Ready,
+}
 
 pub struct RendererPlugin;
 
 impl Plugin for RendererPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_renderer)
-            .add_systems(Update, render);
+        app.add_plugins(ShaderPlugin)
+            .init_state::<RendererState>()
+            .add_systems(OnEnter(RendererState::Loading), load_shader)
+            .add_systems(
+                Update,
+                check_shader_loaded.run_if(in_state(RendererState::Loading)),
+            )
+            .add_systems(OnEnter(RendererState::Ready), setup_renderer)
+            .add_systems(Update, render.run_if(in_state(RendererState::Ready)));
+    }
+}
+
+fn load_shader(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let shader = asset_server.load("shaders/main.comp");
+    commands.insert_resource(ComputeShader(shader));
+}
+
+fn check_shader_loaded(
+    compute_shader: Res<ComputeShader>,
+    assets: Res<Assets<Shader>>,
+    mut next_state: ResMut<NextState<RendererState>>,
+) {
+    if assets.get(&compute_shader.0).is_some() {
+        next_state.set(RendererState::Ready);
     }
 }
 
 fn setup_renderer(
     mut commands: Commands,
     windows: Query<(&Window, &RawHandleWrapper), With<PrimaryWindow>>,
+    compute_shader: Res<ComputeShader>,
+    assets: Res<Assets<Shader>>,
 ) -> Result<(), BevyError> {
+    let shader = assets.get(&compute_shader.0).unwrap();
     let (window, raw_handles) = windows.single()?;
     let UVec2 { x, y } = window.physical_size();
-    let renderer = Renderer::new(raw_handles, x, y)?;
+    let renderer = Renderer::new(raw_handles, x, y, shader)?;
     commands.insert_resource(renderer);
     Ok(())
 }
@@ -44,10 +79,15 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(raw_handles: &RawHandleWrapper, width: u32, height: u32) -> Result<Self> {
+    pub fn new(
+        raw_handles: &RawHandleWrapper,
+        width: u32,
+        height: u32,
+        shader: &Shader,
+    ) -> Result<Self> {
         let device = Device::new(raw_handles)?;
         let swapchain = Swapchain::new(device.clone(), raw_handles, width, height)?;
-        let compute_pipeline = ComputePipeline::new(device.clone(), width, height)?;
+        let compute_pipeline = ComputePipeline::new(device.clone(), width, height, shader)?;
         let start_time = Instant::now();
 
         Ok(Self {
@@ -473,7 +513,7 @@ struct ComputePipeline {
 }
 
 impl ComputePipeline {
-    fn new(device: Device, width: u32, height: u32) -> Result<Self> {
+    fn new(device: Device, width: u32, height: u32, shader: &Shader) -> Result<Self> {
         unsafe {
             let storage_image_extent = vk::Extent3D {
                 width,
@@ -539,10 +579,8 @@ impl ComputePipeline {
                 .device
                 .create_image_view(&storage_image_view_info, None)?;
 
-            let shader_compiler = asset::ShaderCompiler::new()?;
-            let shader_code = shader_compiler.compile_file("assets/shaders/main.comp")?;
             let shader_module_create_info =
-                vk::ShaderModuleCreateInfo::default().code(&shader_code);
+                vk::ShaderModuleCreateInfo::default().code(&shader.code);
 
             let compute_shader_module = device
                 .device
