@@ -1,3 +1,3 @@
 # 💡 Lys
 
-Experimental Vulkan path tracer
+Experimental Vulkan renderer for Bevy
