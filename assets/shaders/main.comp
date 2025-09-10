@@ -1,9 +1,9 @@
 #version 460
 #extension GL_EXT_scalar_block_layout : enable
 
-#include <common>
-#include <camera>
-#include <noise>
+#include "common.glsl"
+#include "camera.glsl"
+#include "noise.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
 

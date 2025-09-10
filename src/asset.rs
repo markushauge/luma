@@ -1,4 +1,4 @@
-use std::{borrow::Cow, path::Path};
+use std::path::Path;
 
 use anyhow::Result;
 
@@ -70,15 +70,17 @@ fn include_callback(
     }
 
     let name = match include_type {
-        shaderc::IncludeType::Relative => Cow::Borrowed(requested_source),
-        shaderc::IncludeType::Standard => Cow::Owned(format!("{requested_source}.glsl")),
+        shaderc::IncludeType::Relative => requested_source,
+        shaderc::IncludeType::Standard => {
+            return Err("Standard include type not supported".to_owned())
+        }
     };
 
     let parent = Path::new(requesting_source)
         .parent()
         .ok_or_else(|| "Could not determine parent directory of requesting source".to_owned())?;
 
-    let resolved_path = parent.join(name.as_ref());
+    let resolved_path = parent.join(name);
     let content = std::fs::read_to_string(&resolved_path)
         .map_err(|e| format!("Failed to read included file: {e}"))?;
 
