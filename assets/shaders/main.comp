@@ -13,11 +13,9 @@ layout(push_constant, scalar) uniform PushConstants {
     uint timeMillis;
 } pc;
 
-const float EPSILON = 0.0005;
-const int MAX_STEPS = 1000;
+const int MAX_STEPS = 200;
 const float MAX_DISTANCE = 1000.0;
-const vec3 SKY_COLOR = vec3(0.6, 0.8, 1.0);
-const float SAMPLE_DISTANCE = 0.01;
+const float SAMPLE_DISTANCE = 0.02;
 
 float sdSphere(vec3 p, float s) {
     return length(p) - s;
