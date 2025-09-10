@@ -3,12 +3,22 @@ name = "lys"
 version = "0.1.0"
 edition = "2021"
 
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [dependencies]
 anyhow = "1.0.99"
 ash = "0.38.0"
 ash-window = "0.13.0"
 bytemuck = { version = "1.23.2", features = ["derive"] }
-shaderc = "0.10.0"
+raw-window-handle = "0.6.2"
+shaderc = "0.10.1"
 tracing = "0.1.41"
-tracing-subscriber = "0.3.20"
-winit = "0.30.9"
+
+[dependencies.bevy]
+default-features = false
+features = ["bevy_log", "bevy_window", "bevy_winit"]
+version = "0.16.1"
