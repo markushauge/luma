@@ -101,18 +101,19 @@ impl Renderer {
     pub fn render(&mut self) -> Result<()> {
         self.device.begin_frame()?;
 
-        let (image_index, present_image) = self.swapchain.acquire_next_image()?;
+        let (image_index, present_image, present_complete_semaphore, rendering_complete_semaphore) =
+            self.swapchain.acquire_next_image()?;
+
         let time_millis = Instant::now().duration_since(self.start_time).as_millis() as u32;
 
         self.compute_pipeline.dispatch(time_millis);
         self.compute_pipeline.blit(present_image);
 
-        self.device.end_frame(
-            self.swapchain.present_complete_semaphore,
-            self.swapchain.rendering_complete_semaphore,
-        )?;
+        self.device
+            .end_frame(present_complete_semaphore, rendering_complete_semaphore)?;
 
-        self.swapchain.present_image(image_index)?;
+        self.swapchain
+            .present_image(image_index, rendering_complete_semaphore)?;
 
         Ok(())
     }
@@ -129,6 +130,7 @@ struct DeviceInner {
     physical_device: vk::PhysicalDevice,
     queue_family_index: u32,
     device: ash::Device,
+    swapchain_device: khr::swapchain::Device,
     queue: vk::Queue,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
@@ -187,6 +189,7 @@ impl Device {
                 .push_next(&mut dynamic_rendering_features);
 
             let device = instance.create_device(physical_device, &device_create_info, None)?;
+            let swapchain_device = khr::swapchain::Device::new(&instance, &device);
             let queue = device.get_device_queue(queue_family_index, 0);
 
             let command_pool_create_info = vk::CommandPoolCreateInfo::default()
@@ -218,6 +221,7 @@ impl Device {
                 physical_device,
                 queue_family_index,
                 device,
+                swapchain_device,
                 queue,
                 command_pool,
                 command_buffer,
@@ -362,42 +366,14 @@ impl Device {
 struct Swapchain {
     device: Device,
     surface: vk::SurfaceKHR,
-    swapchain_device: khr::swapchain::Device,
     swapchain: vk::SwapchainKHR,
     present_images: Vec<vk::Image>,
-    present_complete_semaphore: vk::Semaphore,
-    rendering_complete_semaphore: vk::Semaphore,
+    present_complete_semaphores: Vec<vk::Semaphore>,
+    rendering_complete_semaphores: Vec<vk::Semaphore>,
+    frame_count: usize,
 }
 
 impl Swapchain {
-    fn acquire_next_image(&self) -> Result<(u32, vk::Image)> {
-        unsafe {
-            let (image_index, _) = self.swapchain_device.acquire_next_image(
-                self.swapchain,
-                u64::MAX,
-                self.present_complete_semaphore,
-                vk::Fence::null(),
-            )?;
-
-            let present_image = self.present_images[image_index as usize];
-            Ok((image_index, present_image))
-        }
-    }
-
-    fn present_image(&self, image_index: u32) -> Result<()> {
-        unsafe {
-            let present_info = vk::PresentInfoKHR::default()
-                .wait_semaphores(std::slice::from_ref(&self.rendering_complete_semaphore))
-                .swapchains(std::slice::from_ref(&self.swapchain))
-                .image_indices(std::slice::from_ref(&image_index));
-
-            self.swapchain_device
-                .queue_present(self.device.queue, &present_info)?;
-
-            Ok(())
-        }
-    }
-
     fn new(
         device: Device,
         raw_handles: &RawHandleWrapper,
@@ -453,8 +429,6 @@ impl Swapchain {
                 .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
                 .unwrap_or(vk::PresentModeKHR::FIFO);
 
-            let swapchain_device = khr::swapchain::Device::new(&device.instance, &device.device);
-
             let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
                 .surface(surface)
                 .min_image_count(desired_image_count)
@@ -472,28 +446,82 @@ impl Swapchain {
                 .present_mode(present_mode)
                 .clipped(true);
 
-            let swapchain = swapchain_device.create_swapchain(&swapchain_create_info, None)?;
-            let present_images = swapchain_device.get_swapchain_images(swapchain)?;
+            let swapchain = device
+                .swapchain_device
+                .create_swapchain(&swapchain_create_info, None)?;
 
+            let present_images = device.swapchain_device.get_swapchain_images(swapchain)?;
+
+            let mut present_complete_semaphores = vec![];
+            let mut rendering_complete_semaphores = vec![];
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
-            let present_complete_semaphore = device
-                .device
-                .create_semaphore(&semaphore_create_info, None)?;
+            for _ in 0..present_images.len() {
+                present_complete_semaphores.push(
+                    device
+                        .device
+                        .create_semaphore(&semaphore_create_info, None)?,
+                );
 
-            let rendering_complete_semaphore = device
-                .device
-                .create_semaphore(&semaphore_create_info, None)?;
+                rendering_complete_semaphores.push(
+                    device
+                        .device
+                        .create_semaphore(&semaphore_create_info, None)?,
+                );
+            }
+
+            let frame_count = 0;
 
             Ok(Self {
                 device,
                 surface,
-                swapchain_device,
                 swapchain,
                 present_images,
+                present_complete_semaphores,
+                rendering_complete_semaphores,
+                frame_count,
+            })
+        }
+    }
+
+    fn acquire_next_image(&self) -> Result<(u32, vk::Image, vk::Semaphore, vk::Semaphore)> {
+        unsafe {
+            let frame_index = self.frame_count % self.present_complete_semaphores.len();
+            let present_complete_semaphore = self.present_complete_semaphores[frame_index];
+            let rendering_complete_semaphore = self.rendering_complete_semaphores[frame_index];
+
+            let (image_index, _) = self.device.swapchain_device.acquire_next_image(
+                self.swapchain,
+                u64::MAX,
+                present_complete_semaphore,
+                vk::Fence::null(),
+            )?;
+
+            assert_eq!(image_index as usize, frame_index);
+            let present_image = self.present_images[image_index as usize];
+
+            Ok((
+                image_index,
+                present_image,
                 present_complete_semaphore,
                 rendering_complete_semaphore,
-            })
+            ))
+        }
+    }
+
+    fn present_image(&mut self, image_index: u32, wait_semaphore: vk::Semaphore) -> Result<()> {
+        unsafe {
+            let present_info = vk::PresentInfoKHR::default()
+                .wait_semaphores(std::slice::from_ref(&wait_semaphore))
+                .swapchains(std::slice::from_ref(&self.swapchain))
+                .image_indices(std::slice::from_ref(&image_index));
+
+            self.device
+                .swapchain_device
+                .queue_present(self.device.queue, &present_info)?;
+
+            self.frame_count += 1;
+            Ok(())
         }
     }
 }
