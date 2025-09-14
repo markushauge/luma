@@ -8,7 +8,10 @@ use bevy::{
 };
 use bytemuck::{Pod, Zeroable};
 
-use crate::shader::{Shader, ShaderPlugin};
+use crate::{
+    camera::Camera,
+    shader::{Shader, ShaderPlugin},
+};
 
 #[derive(Resource)]
 struct ComputeShader(Handle<Shader>);
@@ -65,8 +68,12 @@ fn setup_renderer(
     Ok(())
 }
 
-fn render(mut renderer: ResMut<Renderer>) -> Result<(), BevyError> {
-    renderer.render()?;
+fn render(
+    mut renderer: ResMut<Renderer>,
+    query: Query<&Transform, With<Camera>>,
+) -> Result<(), BevyError> {
+    let camera_transform = query.single()?;
+    renderer.render(camera_transform)?;
     Ok(())
 }
 
@@ -98,7 +105,7 @@ impl Renderer {
         })
     }
 
-    pub fn render(&mut self) -> Result<()> {
+    pub fn render(&mut self, camera_transform: &Transform) -> Result<()> {
         self.device.begin_frame()?;
 
         let (image_index, present_image, present_complete_semaphore, rendering_complete_semaphore) =
@@ -106,7 +113,8 @@ impl Renderer {
 
         let time_millis = Instant::now().duration_since(self.start_time).as_millis() as u32;
 
-        self.compute_pipeline.dispatch(time_millis);
+        self.compute_pipeline
+            .dispatch(camera_transform, time_millis);
         self.compute_pipeline.blit(present_image);
 
         self.device
@@ -183,10 +191,14 @@ impl Device {
             let mut dynamic_rendering_features =
                 vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
 
+            let mut scalar_block_layout_features =
+                vk::PhysicalDeviceScalarBlockLayoutFeatures::default().scalar_block_layout(true);
+
             let device_create_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(std::slice::from_ref(&queue_create_info))
                 .enabled_extension_names(&device_extensions)
-                .push_next(&mut dynamic_rendering_features);
+                .push_next(&mut dynamic_rendering_features)
+                .push_next(&mut scalar_block_layout_features);
 
             let device = instance.create_device(physical_device, &device_create_info, None)?;
             let swapchain_device = khr::swapchain::Device::new(&instance, &device);
@@ -722,7 +734,7 @@ impl ComputePipeline {
         }
     }
 
-    fn dispatch(&self, time_millis: u32) {
+    fn dispatch(&self, camera_transform: &Transform, time_millis: u32) {
         unsafe {
             self.device.transition_image(
                 self.device.command_buffer,
@@ -747,8 +759,11 @@ impl ComputePipeline {
             );
 
             let push_constants = PushConstants {
-                width: self.storage_image_extent.width,
-                height: self.storage_image_extent.height,
+                viewport_width: self.storage_image_extent.width,
+                viewport_height: self.storage_image_extent.height,
+                camera_translation: camera_transform.translation,
+                camera_rotation: Mat3::from_quat(camera_transform.rotation),
+                camera_fov: 52.0, // TODO: Make configurable
                 time_millis,
             };
 
@@ -836,7 +851,10 @@ impl ComputePipeline {
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 struct PushConstants {
-    width: u32,
-    height: u32,
+    viewport_width: u32,
+    viewport_height: u32,
+    camera_translation: Vec3,
+    camera_rotation: Mat3,
+    camera_fov: f32,
     time_millis: u32,
 }
