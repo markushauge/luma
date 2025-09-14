@@ -14,7 +14,7 @@ pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, update_transform)
+        app.add_systems(Update, (update_transform, update_transform_gamepad))
             .add_systems(Update, update_cursor_grab);
     }
 }
@@ -75,6 +75,77 @@ fn update_transform(
             let window_scale = window.height().min(window.width());
             pitch -= (LOOK_SENSITIVITY * event.delta.y * window_scale).to_radians();
             yaw -= (LOOK_SENSITIVITY * event.delta.x * window_scale).to_radians();
+
+            pitch = pitch.clamp(-1.54, 1.54);
+
+            // Order is important to prevent unintended roll
+            transform.rotation =
+                Quat::from_axis_angle(Vec3::Y, yaw) * Quat::from_axis_angle(Vec3::X, pitch);
+        }
+    }
+}
+
+fn update_transform_gamepad(
+    window: Query<&Window, With<PrimaryWindow>>,
+    gamepads: Query<&Gamepad>,
+    time: Res<Time>,
+    mut query: Query<&mut Transform, With<Camera>>,
+) {
+    let Ok(window) = window.single() else {
+        return;
+    };
+
+    for mut transform in query.iter_mut() {
+        for gamepad in gamepads.iter() {
+            let mut velocity = Vec3::ZERO;
+            let local_z = transform.local_z();
+            let forward = -Vec3::new(local_z.x, 0.0, local_z.z);
+            let right = Vec3::new(local_z.z, 0.0, -local_z.x);
+
+            if let (Some(mut x), Some(mut y)) = (
+                gamepad.get(GamepadAxis::LeftStickX),
+                gamepad.get(GamepadAxis::LeftStickY),
+            ) {
+                if x.abs() < 0.1 {
+                    x = 0.0;
+                }
+
+                if y.abs() < 0.1 {
+                    y = 0.0;
+                }
+
+                velocity += forward * y;
+                velocity += right * x;
+            }
+
+            if gamepad.pressed(GamepadButton::LeftTrigger2) {
+                velocity += Vec3::Y;
+            }
+
+            if gamepad.pressed(GamepadButton::RightTrigger2) {
+                velocity -= Vec3::Y;
+            }
+
+            transform.translation += velocity * time.delta_secs() * MOVE_SENSITIVITY;
+
+            let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
+            let window_scale = window.height().min(window.width());
+
+            if let (Some(mut x), Some(mut y)) = (
+                gamepad.get(GamepadAxis::RightStickX),
+                gamepad.get(GamepadAxis::RightStickY),
+            ) {
+                if x.abs() < 0.1 {
+                    x = 0.0;
+                }
+
+                if y.abs() < 0.1 {
+                    y = 0.0;
+                }
+
+                yaw -= (LOOK_SENSITIVITY * x * window_scale).to_radians();
+                pitch += (LOOK_SENSITIVITY * y * window_scale).to_radians();
+            }
 
             pitch = pitch.clamp(-1.54, 1.54);
 
