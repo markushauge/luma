@@ -763,7 +763,7 @@ impl ComputePipeline {
                 viewport_height: self.storage_image_extent.height,
                 camera_translation: camera_transform.translation,
                 camera_rotation: Mat3::from_quat(camera_transform.rotation),
-                camera_fov: 52.0, // TODO: Make configurable
+                camera_fov: 52.0f32.to_radians(), // TODO: Make configurable
                 time_millis,
             };
 
