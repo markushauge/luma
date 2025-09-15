@@ -14,6 +14,19 @@ use crate::{
 };
 
 #[derive(Resource)]
+pub struct RendererSettings {
+    pub resolution_scaling: f32,
+}
+
+impl Default for RendererSettings {
+    fn default() -> Self {
+        Self {
+            resolution_scaling: 1.0,
+        }
+    }
+}
+
+#[derive(Resource)]
 struct ComputeShader(Handle<Shader>);
 
 #[derive(States, Default, Debug, Hash, PartialEq, Eq, Clone)]
@@ -29,6 +42,7 @@ impl Plugin for RendererPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ShaderPlugin)
             .init_state::<RendererState>()
+            .init_resource::<RendererSettings>()
             .add_systems(OnEnter(RendererState::Loading), load_shader)
             .add_systems(
                 Update,
@@ -57,13 +71,14 @@ fn check_shader_loaded(
 fn setup_renderer(
     mut commands: Commands,
     windows: Query<(&Window, &RawHandleWrapper), With<PrimaryWindow>>,
+    settings: Res<RendererSettings>,
     compute_shader: Res<ComputeShader>,
     assets: Res<Assets<Shader>>,
 ) -> Result<(), BevyError> {
     let shader = assets.get(&compute_shader.0).unwrap();
     let (window, raw_handles) = windows.single()?;
     let UVec2 { x, y } = window.physical_size();
-    let renderer = Renderer::new(raw_handles, x, y, shader)?;
+    let renderer = Renderer::new(raw_handles, x, y, &settings, shader)?;
     commands.insert_resource(renderer);
     Ok(())
 }
@@ -90,11 +105,18 @@ impl Renderer {
         raw_handles: &RawHandleWrapper,
         width: u32,
         height: u32,
+        settings: &RendererSettings,
         shader: &Shader,
     ) -> Result<Self> {
         let device = Device::new(raw_handles)?;
         let swapchain = Swapchain::new(device.clone(), raw_handles, width, height)?;
-        let compute_pipeline = ComputePipeline::new(device.clone(), width, height, shader)?;
+        let compute_pipeline = ComputePipeline::new(
+            device.clone(),
+            width,
+            height,
+            settings.resolution_scaling,
+            shader,
+        )?;
         let start_time = Instant::now();
 
         Ok(Self {
@@ -115,7 +137,9 @@ impl Renderer {
 
         self.compute_pipeline
             .dispatch(camera_transform, time_millis);
-        self.compute_pipeline.blit(present_image);
+
+        self.compute_pipeline
+            .blit(present_image, self.swapchain.surface_extent);
 
         self.device
             .end_frame(present_complete_semaphore, rendering_complete_semaphore)?;
@@ -378,6 +402,7 @@ impl Device {
 struct Swapchain {
     device: Device,
     surface: vk::SurfaceKHR,
+    surface_extent: vk::Extent2D,
     swapchain: vk::SwapchainKHR,
     present_images: Vec<vk::Image>,
     present_complete_semaphores: Vec<vk::Semaphore>,
@@ -487,6 +512,7 @@ impl Swapchain {
             Ok(Self {
                 device,
                 surface,
+                surface_extent,
                 swapchain,
                 present_images,
                 present_complete_semaphores,
@@ -553,8 +579,17 @@ struct ComputePipeline {
 }
 
 impl ComputePipeline {
-    fn new(device: Device, width: u32, height: u32, shader: &Shader) -> Result<Self> {
+    fn new(
+        device: Device,
+        width: u32,
+        height: u32,
+        resolution_scaling: f32,
+        shader: &Shader,
+    ) -> Result<Self> {
         unsafe {
+            let width = (width as f32 * resolution_scaling) as u32;
+            let height = (height as f32 * resolution_scaling) as u32;
+
             let storage_image_extent = vk::Extent3D {
                 width,
                 height,
@@ -784,7 +819,7 @@ impl ComputePipeline {
         }
     }
 
-    fn blit(&self, present_image: vk::Image) {
+    fn blit(&self, present_image: vk::Image, present_image_extent: vk::Extent2D) {
         unsafe {
             self.device.transition_image(
                 self.device.command_buffer,
@@ -810,16 +845,24 @@ impl ComputePipeline {
             let x = self.storage_image_extent.width as i32;
             let y = self.storage_image_extent.height as i32;
 
-            let offsets = [
+            let src_offsets = [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D { x, y, z: 1 },
+            ];
+
+            let x = present_image_extent.width as i32;
+            let y = present_image_extent.height as i32;
+
+            let dst_offsets = [
                 vk::Offset3D { x: 0, y: 0, z: 0 },
                 vk::Offset3D { x, y, z: 1 },
             ];
 
             let image_blit = vk::ImageBlit::default()
                 .src_subresource(subresource)
-                .src_offsets(offsets)
+                .src_offsets(src_offsets)
                 .dst_subresource(subresource)
-                .dst_offsets(offsets);
+                .dst_offsets(dst_offsets);
 
             self.device.device.cmd_blit_image(
                 self.device.command_buffer,
