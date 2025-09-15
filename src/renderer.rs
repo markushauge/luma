@@ -871,7 +871,7 @@ impl ComputePipeline {
                 present_image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[image_blit],
-                vk::Filter::NEAREST,
+                vk::Filter::LINEAR,
             );
 
             self.device.transition_image(
