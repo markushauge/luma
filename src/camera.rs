@@ -10,6 +10,10 @@ use bevy::{
 const MOVE_SENSITIVITY: f32 = 10.0;
 const LOOK_SENSITIVITY: f32 = 0.0001;
 
+const GAMEPAD_DEADZONE: f32 = 0.1;
+const GAMEPAD_MOVE_SENSITIVITY: f32 = 5.0;
+const GAMEPAD_LOOK_SENSITIVITY: f32 = 100.0;
+
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
@@ -86,15 +90,10 @@ fn update_transform(
 }
 
 fn update_transform_gamepad(
-    window: Query<&Window, With<PrimaryWindow>>,
     gamepads: Query<&Gamepad>,
     time: Res<Time>,
     mut query: Query<&mut Transform, With<Camera>>,
 ) {
-    let Ok(window) = window.single() else {
-        return;
-    };
-
     for mut transform in query.iter_mut() {
         for gamepad in gamepads.iter() {
             let mut velocity = Vec3::ZERO;
@@ -102,20 +101,17 @@ fn update_transform_gamepad(
             let forward = -local_z.as_vec3();
             let right = forward.cross(Vec3::Y);
 
-            if let (Some(mut x), Some(mut y)) = (
+            if let (Some(x), Some(y)) = (
                 gamepad.get(GamepadAxis::LeftStickX),
                 gamepad.get(GamepadAxis::LeftStickY),
             ) {
-                if x.abs() < 0.1 {
-                    x = 0.0;
+                if x.abs() > GAMEPAD_DEADZONE {
+                    velocity += right * x;
                 }
 
-                if y.abs() < 0.1 {
-                    y = 0.0;
+                if y.abs() > GAMEPAD_DEADZONE {
+                    velocity += forward * y;
                 }
-
-                velocity += forward * y;
-                velocity += right * x;
             }
 
             if gamepad.pressed(GamepadButton::LeftTrigger2) {
@@ -126,32 +122,25 @@ fn update_transform_gamepad(
                 velocity -= Vec3::Y;
             }
 
-            transform.translation += velocity * time.delta_secs() * MOVE_SENSITIVITY;
+            transform.translation += velocity * time.delta_secs() * GAMEPAD_MOVE_SENSITIVITY;
 
-            let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
-            let window_scale = window.height().min(window.width());
+            let (mut yaw, mut pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
 
-            if let (Some(mut x), Some(mut y)) = (
+            if let (Some(x), Some(y)) = (
                 gamepad.get(GamepadAxis::RightStickX),
                 gamepad.get(GamepadAxis::RightStickY),
             ) {
-                if x.abs() < 0.1 {
-                    x = 0.0;
+                if x.abs() > GAMEPAD_DEADZONE {
+                    yaw -= (GAMEPAD_LOOK_SENSITIVITY * x * time.delta_secs()).to_radians();
                 }
 
-                if y.abs() < 0.1 {
-                    y = 0.0;
+                if y.abs() > GAMEPAD_DEADZONE {
+                    pitch += (GAMEPAD_LOOK_SENSITIVITY * y * time.delta_secs()).to_radians();
                 }
-
-                yaw -= (LOOK_SENSITIVITY * x * window_scale).to_radians();
-                pitch += (LOOK_SENSITIVITY * y * window_scale).to_radians();
             }
 
             pitch = pitch.clamp(-1.54, 1.54);
-
-            // Order is important to prevent unintended roll
-            transform.rotation =
-                Quat::from_axis_angle(Vec3::Y, yaw) * Quat::from_axis_angle(Vec3::X, pitch);
+            transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
         }
     }
 }
