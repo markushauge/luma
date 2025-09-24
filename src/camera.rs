@@ -37,55 +37,53 @@ fn update_transform(
         return;
     };
 
+    let Ok(mut transform) = query.single_mut() else {
+        return;
+    };
+
     if window.cursor_options.grab_mode != CursorGrabMode::Confined {
         return;
     }
 
-    for mut transform in query.iter_mut() {
-        let mut velocity = Vec3::ZERO;
-        let local_z = transform.local_z();
-        let forward = -local_z.as_vec3();
-        let right = forward.cross(Vec3::Y);
+    let mut velocity = Vec3::ZERO;
+    let local_z = transform.local_z();
+    let forward = -local_z.as_vec3();
+    let right = forward.cross(Vec3::Y);
 
-        for key in keys.get_pressed() {
-            match key {
-                KeyCode::KeyW => {
-                    velocity += forward;
-                }
-                KeyCode::KeyS => {
-                    velocity -= forward;
-                }
-                KeyCode::KeyA => {
-                    velocity -= right;
-                }
-                KeyCode::KeyD => {
-                    velocity += right;
-                }
-                KeyCode::Space => {
-                    velocity += Vec3::Y;
-                }
-                KeyCode::ShiftLeft => {
-                    velocity -= Vec3::Y;
-                }
-                _ => {}
+    for key in keys.get_pressed() {
+        match key {
+            KeyCode::KeyW => {
+                velocity += forward;
             }
+            KeyCode::KeyS => {
+                velocity -= forward;
+            }
+            KeyCode::KeyA => {
+                velocity -= right;
+            }
+            KeyCode::KeyD => {
+                velocity += right;
+            }
+            KeyCode::Space => {
+                velocity += Vec3::Y;
+            }
+            KeyCode::ShiftLeft => {
+                velocity -= Vec3::Y;
+            }
+            _ => {}
         }
+    }
 
-        velocity = velocity.normalize_or_zero();
-        transform.translation += velocity * time.delta_secs() * MOVE_SENSITIVITY;
+    velocity = velocity.normalize_or_zero();
+    transform.translation += velocity * time.delta_secs() * MOVE_SENSITIVITY;
 
-        for event in state.read() {
-            let (mut yaw, mut pitch, _) = transform.rotation.to_euler(EulerRot::YXZ);
-            let window_scale = window.height().min(window.width());
-            pitch -= (LOOK_SENSITIVITY * event.delta.y * window_scale).to_radians();
-            yaw -= (LOOK_SENSITIVITY * event.delta.x * window_scale).to_radians();
-
-            pitch = pitch.clamp(-1.54, 1.54);
-
-            // Order is important to prevent unintended roll
-            transform.rotation =
-                Quat::from_axis_angle(Vec3::Y, yaw) * Quat::from_axis_angle(Vec3::X, pitch);
-        }
+    for event in state.read() {
+        let (mut yaw, mut pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
+        let window_scale = window.height().min(window.width());
+        pitch -= (LOOK_SENSITIVITY * event.delta.y * window_scale).to_radians();
+        yaw -= (LOOK_SENSITIVITY * event.delta.x * window_scale).to_radians();
+        pitch = pitch.clamp(-1.54, 1.54);
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
     }
 }
 
@@ -94,54 +92,56 @@ fn update_transform_gamepad(
     time: Res<Time>,
     mut query: Query<&mut Transform, With<Camera>>,
 ) {
-    for mut transform in query.iter_mut() {
-        for gamepad in gamepads.iter() {
-            let mut velocity = Vec3::ZERO;
-            let local_z = transform.local_z();
-            let forward = -local_z.as_vec3();
-            let right = forward.cross(Vec3::Y);
+    let Ok(mut transform) = query.single_mut() else {
+        return;
+    };
 
-            if let (Some(x), Some(y)) = (
-                gamepad.get(GamepadAxis::LeftStickX),
-                gamepad.get(GamepadAxis::LeftStickY),
-            ) {
-                if x.abs() > GAMEPAD_DEADZONE {
-                    velocity += right * x;
-                }
+    for gamepad in gamepads.iter() {
+        let mut velocity = Vec3::ZERO;
+        let local_z = transform.local_z();
+        let forward = -local_z.as_vec3();
+        let right = forward.cross(Vec3::Y);
 
-                if y.abs() > GAMEPAD_DEADZONE {
-                    velocity += forward * y;
-                }
+        if let (Some(x), Some(y)) = (
+            gamepad.get(GamepadAxis::LeftStickX),
+            gamepad.get(GamepadAxis::LeftStickY),
+        ) {
+            if x.abs() > GAMEPAD_DEADZONE {
+                velocity += right * x;
             }
 
-            if gamepad.pressed(GamepadButton::LeftTrigger2) {
-                velocity += Vec3::Y;
+            if y.abs() > GAMEPAD_DEADZONE {
+                velocity += forward * y;
             }
-
-            if gamepad.pressed(GamepadButton::RightTrigger2) {
-                velocity -= Vec3::Y;
-            }
-
-            transform.translation += velocity * time.delta_secs() * GAMEPAD_MOVE_SENSITIVITY;
-
-            let (mut yaw, mut pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
-
-            if let (Some(x), Some(y)) = (
-                gamepad.get(GamepadAxis::RightStickX),
-                gamepad.get(GamepadAxis::RightStickY),
-            ) {
-                if x.abs() > GAMEPAD_DEADZONE {
-                    yaw -= (GAMEPAD_LOOK_SENSITIVITY * x * time.delta_secs()).to_radians();
-                }
-
-                if y.abs() > GAMEPAD_DEADZONE {
-                    pitch += (GAMEPAD_LOOK_SENSITIVITY * y * time.delta_secs()).to_radians();
-                }
-            }
-
-            pitch = pitch.clamp(-1.54, 1.54);
-            transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
         }
+
+        if gamepad.pressed(GamepadButton::LeftTrigger2) {
+            velocity += Vec3::Y;
+        }
+
+        if gamepad.pressed(GamepadButton::RightTrigger2) {
+            velocity -= Vec3::Y;
+        }
+
+        transform.translation += velocity * time.delta_secs() * GAMEPAD_MOVE_SENSITIVITY;
+
+        let (mut yaw, mut pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
+
+        if let (Some(x), Some(y)) = (
+            gamepad.get(GamepadAxis::RightStickX),
+            gamepad.get(GamepadAxis::RightStickY),
+        ) {
+            if x.abs() > GAMEPAD_DEADZONE {
+                yaw -= (GAMEPAD_LOOK_SENSITIVITY * x * time.delta_secs()).to_radians();
+            }
+
+            if y.abs() > GAMEPAD_DEADZONE {
+                pitch += (GAMEPAD_LOOK_SENSITIVITY * y * time.delta_secs()).to_radians();
+            }
+        }
+
+        pitch = pitch.clamp(-1.54, 1.54);
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
     }
 }
 
