@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{Error, Result, anyhow};
 use bevy::{
-    asset::{io::Reader, AssetLoader, AsyncReadExt, LoadContext},
+    asset::{AssetLoader, AsyncReadExt, LoadContext, io::Reader},
     prelude::*,
     tasks::ConditionalSendFuture,
 };
@@ -60,7 +60,7 @@ impl AssetLoader for ShaderLoader {
                     return Err(anyhow!(
                         "Could not infer shader kind from extension: {:?}",
                         extension
-                    ))
+                    ));
                 }
             };
 
@@ -100,7 +100,7 @@ fn include_callback(
     let name = match include_type {
         shaderc::IncludeType::Relative => requested_source,
         shaderc::IncludeType::Standard => {
-            return Err("Standard include type not supported".to_owned())
+            return Err("Standard include type not supported".to_owned());
         }
     };
 

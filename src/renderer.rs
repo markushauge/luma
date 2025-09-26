@@ -1,6 +1,6 @@
 use std::{ffi::c_char, sync::Arc, time::Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use ash::{khr, vk};
 use bevy::{
     prelude::*,
