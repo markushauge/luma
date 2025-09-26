@@ -10,7 +10,8 @@ use bevy::{
 const MOVE_SENSITIVITY: f32 = 10.0;
 const LOOK_SENSITIVITY: f32 = 0.0001;
 
-const GAMEPAD_DEADZONE: f32 = 0.1;
+const GAMEPAD_JOYSTICK_DEADZONE: f32 = 0.1;
+const GAMEPAD_TRIGGER_DEADZONE: f32 = 0.01;
 const GAMEPAD_MOVE_SENSITIVITY: f32 = 5.0;
 const GAMEPAD_LOOK_SENSITIVITY: f32 = 100.0;
 
@@ -106,21 +107,26 @@ fn update_transform_gamepad(
             gamepad.get(GamepadAxis::LeftStickX),
             gamepad.get(GamepadAxis::LeftStickY),
         ) {
-            if x.abs() > GAMEPAD_DEADZONE {
+            if x.abs() > GAMEPAD_JOYSTICK_DEADZONE {
                 velocity += right * x;
             }
 
-            if y.abs() > GAMEPAD_DEADZONE {
+            if y.abs() > GAMEPAD_JOYSTICK_DEADZONE {
                 velocity += forward * y;
             }
         }
 
-        if gamepad.pressed(GamepadButton::LeftTrigger2) {
-            velocity += Vec3::Y;
-        }
+        if let (Some(right), Some(left)) = (
+            gamepad.get(GamepadButton::RightTrigger2),
+            gamepad.get(GamepadButton::LeftTrigger2),
+        ) {
+            if right.abs() > GAMEPAD_TRIGGER_DEADZONE {
+                velocity += Vec3::Y * right;
+            }
 
-        if gamepad.pressed(GamepadButton::RightTrigger2) {
-            velocity -= Vec3::Y;
+            if left.abs() > GAMEPAD_TRIGGER_DEADZONE {
+                velocity -= Vec3::Y * left;
+            }
         }
 
         transform.translation += velocity * time.delta_secs() * GAMEPAD_MOVE_SENSITIVITY;
@@ -131,11 +137,11 @@ fn update_transform_gamepad(
             gamepad.get(GamepadAxis::RightStickX),
             gamepad.get(GamepadAxis::RightStickY),
         ) {
-            if x.abs() > GAMEPAD_DEADZONE {
+            if x.abs() > GAMEPAD_JOYSTICK_DEADZONE {
                 yaw -= (GAMEPAD_LOOK_SENSITIVITY * x * time.delta_secs()).to_radians();
             }
 
-            if y.abs() > GAMEPAD_DEADZONE {
+            if y.abs() > GAMEPAD_JOYSTICK_DEADZONE {
                 pitch += (GAMEPAD_LOOK_SENSITIVITY * y * time.delta_secs()).to_radians();
             }
         }
