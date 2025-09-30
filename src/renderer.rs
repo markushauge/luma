@@ -13,7 +13,7 @@ use crate::{
     shader::{Shader, ShaderPlugin},
 };
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct RendererSettings {
     pub resolution_scaling: f32,
 }
@@ -36,13 +36,16 @@ enum RendererState {
     Ready,
 }
 
-pub struct RendererPlugin;
+#[derive(Default)]
+pub struct RendererPlugin {
+    pub settings: RendererSettings,
+}
 
 impl Plugin for RendererPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ShaderPlugin)
             .init_state::<RendererState>()
-            .init_resource::<RendererSettings>()
+            .insert_resource(self.settings.clone())
             .add_systems(OnEnter(RendererState::Loading), load_shader)
             .add_systems(
                 Update,
