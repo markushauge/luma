@@ -95,11 +95,15 @@ fn render(
     Ok(())
 }
 
+const MAX_CONCURRENT_FRAMES: u32 = 2;
+
 #[derive(Resource)]
 pub struct Renderer {
     device: Device,
     swapchain: Swapchain,
     compute_pipeline: ComputePipeline,
+    frames: Vec<Frame>,
+    frame_count: usize,
     start_time: Instant,
 }
 
@@ -113,6 +117,7 @@ impl Renderer {
     ) -> Result<Self> {
         let device = Device::new(raw_handles)?;
         let swapchain = Swapchain::new(device.clone(), raw_handles, width, height)?;
+
         let compute_pipeline = ComputePipeline::new(
             device.clone(),
             width,
@@ -120,35 +125,60 @@ impl Renderer {
             settings.resolution_scaling,
             shader,
         )?;
+
+        let command_buffers = unsafe {
+            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+                .command_buffer_count(MAX_CONCURRENT_FRAMES)
+                .command_pool(device.command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY);
+
+            device
+                .device
+                .allocate_command_buffers(&command_buffer_allocate_info)?
+        };
+
+        let frames = command_buffers
+            .into_iter()
+            .map(|command_buffer| Frame::new(&device, command_buffer))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let frame_count = 0;
         let start_time = Instant::now();
 
         Ok(Self {
             device,
             swapchain,
             compute_pipeline,
+            frames,
+            frame_count,
             start_time,
         })
     }
 
     pub fn render(&mut self, camera_transform: &Transform) -> Result<()> {
-        self.device.begin_frame()?;
+        let frame_index = self.frame_count % self.frames.len();
+        let frame = &self.frames[frame_index];
 
-        let (image_index, present_image, present_complete_semaphore, rendering_complete_semaphore) =
-            self.swapchain.acquire_next_image()?;
+        self.device.begin_frame(frame)?;
+
+        let (image_index, present_image) = self
+            .swapchain
+            .acquire_next_image(frame.present_complete_semaphore)?;
 
         let time_millis = Instant::now().duration_since(self.start_time).as_millis() as u32;
 
         self.compute_pipeline
-            .dispatch(camera_transform, time_millis);
+            .dispatch(frame, camera_transform, time_millis);
 
         self.compute_pipeline
-            .blit(present_image, self.swapchain.surface_extent);
+            .blit(frame, present_image, self.swapchain.surface_extent);
 
-        self.device
-            .end_frame(present_complete_semaphore, rendering_complete_semaphore)?;
+        self.device.end_frame(frame)?;
 
         self.swapchain
-            .present_image(image_index, rendering_complete_semaphore)?;
+            .present_image(image_index, frame.rendering_complete_semaphore)?;
+
+        self.frame_count += 1;
 
         Ok(())
     }
@@ -168,8 +198,6 @@ struct DeviceInner {
     swapchain_device: khr::swapchain::Device,
     queue: vk::Queue,
     command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    command_buffer_fence: vk::Fence,
 }
 
 impl Device {
@@ -237,22 +265,6 @@ impl Device {
 
             let command_pool = device.create_command_pool(&command_pool_create_info, None)?;
 
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(1)
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY);
-
-            let command_buffers = device.allocate_command_buffers(&command_buffer_allocate_info)?;
-
-            let [command_buffer] = command_buffers
-                .try_into()
-                .map_err(|_| anyhow!("Expected 1 command buffer"))?;
-
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-            let command_buffer_fence = device.create_fence(&fence_create_info, None)?;
-
             let inner = DeviceInner {
                 entry,
                 instance,
@@ -263,23 +275,21 @@ impl Device {
                 swapchain_device,
                 queue,
                 command_pool,
-                command_buffer,
-                command_buffer_fence,
             };
 
             Ok(Self(Arc::new(inner)))
         }
     }
 
-    fn begin_frame(&self) -> Result<()> {
+    fn begin_frame(&self, frame: &Frame) -> Result<()> {
         unsafe {
             self.device
-                .wait_for_fences(&[self.command_buffer_fence], true, u64::MAX)?;
+                .wait_for_fences(&[frame.fence], true, u64::MAX)?;
 
-            self.device.reset_fences(&[self.command_buffer_fence])?;
+            self.device.reset_fences(&[frame.fence])?;
 
             self.device.reset_command_buffer(
-                self.command_buffer,
+                frame.command_buffer,
                 vk::CommandBufferResetFlags::RELEASE_RESOURCES,
             )?;
 
@@ -287,28 +297,24 @@ impl Device {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
             self.device
-                .begin_command_buffer(self.command_buffer, &command_buffer_begin_info)?;
+                .begin_command_buffer(frame.command_buffer, &command_buffer_begin_info)?;
 
             Ok(())
         }
     }
 
-    fn end_frame(
-        &self,
-        wait_semaphore: vk::Semaphore,
-        signal_semaphore: vk::Semaphore,
-    ) -> Result<()> {
+    fn end_frame(&self, frame: &Frame) -> Result<()> {
         unsafe {
-            self.device.end_command_buffer(self.command_buffer)?;
+            self.device.end_command_buffer(frame.command_buffer)?;
 
             let submit_info = vk::SubmitInfo::default()
-                .wait_semaphores(std::slice::from_ref(&wait_semaphore))
+                .wait_semaphores(std::slice::from_ref(&frame.present_complete_semaphore))
                 .wait_dst_stage_mask(&[vk::PipelineStageFlags::ALL_COMMANDS])
-                .command_buffers(std::slice::from_ref(&self.command_buffer))
-                .signal_semaphores(std::slice::from_ref(&signal_semaphore));
+                .command_buffers(std::slice::from_ref(&frame.command_buffer))
+                .signal_semaphores(std::slice::from_ref(&frame.rendering_complete_semaphore));
 
             self.device
-                .queue_submit(self.queue, &[submit_info], self.command_buffer_fence)?;
+                .queue_submit(self.queue, &[submit_info], frame.fence)?;
 
             Ok(())
         }
@@ -401,6 +407,41 @@ impl Device {
     }
 }
 
+struct Frame {
+    command_buffer: vk::CommandBuffer,
+    present_complete_semaphore: vk::Semaphore,
+    rendering_complete_semaphore: vk::Semaphore,
+    fence: vk::Fence,
+}
+
+impl Frame {
+    fn new(device: &Device, command_buffer: vk::CommandBuffer) -> Result<Self> {
+        unsafe {
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+
+            let present_complete_semaphore = device
+                .device
+                .create_semaphore(&semaphore_create_info, None)?;
+
+            let rendering_complete_semaphore = device
+                .device
+                .create_semaphore(&semaphore_create_info, None)?;
+
+            let fence_create_info =
+                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+
+            let fence = device.device.create_fence(&fence_create_info, None)?;
+
+            Ok(Self {
+                command_buffer,
+                present_complete_semaphore,
+                rendering_complete_semaphore,
+                fence,
+            })
+        }
+    }
+}
+
 #[allow(dead_code)]
 struct Swapchain {
     device: Device,
@@ -408,9 +449,6 @@ struct Swapchain {
     surface_extent: vk::Extent2D,
     swapchain: vk::SwapchainKHR,
     present_images: Vec<vk::Image>,
-    present_complete_semaphores: Vec<vk::Semaphore>,
-    rendering_complete_semaphores: Vec<vk::Semaphore>,
-    frame_count: usize,
 }
 
 impl Swapchain {
@@ -492,45 +530,21 @@ impl Swapchain {
 
             let present_images = device.swapchain_device.get_swapchain_images(swapchain)?;
 
-            let mut present_complete_semaphores = vec![];
-            let mut rendering_complete_semaphores = vec![];
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            for _ in 0..present_images.len() {
-                present_complete_semaphores.push(
-                    device
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)?,
-                );
-
-                rendering_complete_semaphores.push(
-                    device
-                        .device
-                        .create_semaphore(&semaphore_create_info, None)?,
-                );
-            }
-
-            let frame_count = 0;
-
             Ok(Self {
                 device,
                 surface,
                 surface_extent,
                 swapchain,
                 present_images,
-                present_complete_semaphores,
-                rendering_complete_semaphores,
-                frame_count,
             })
         }
     }
 
-    fn acquire_next_image(&self) -> Result<(u32, vk::Image, vk::Semaphore, vk::Semaphore)> {
+    fn acquire_next_image(
+        &self,
+        present_complete_semaphore: vk::Semaphore,
+    ) -> Result<(u32, vk::Image)> {
         unsafe {
-            let frame_index = self.frame_count % self.present_complete_semaphores.len();
-            let present_complete_semaphore = self.present_complete_semaphores[frame_index];
-            let rendering_complete_semaphore = self.rendering_complete_semaphores[frame_index];
-
             let (image_index, _) = self.device.swapchain_device.acquire_next_image(
                 self.swapchain,
                 u64::MAX,
@@ -538,15 +552,8 @@ impl Swapchain {
                 vk::Fence::null(),
             )?;
 
-            assert_eq!(image_index as usize, frame_index);
             let present_image = self.present_images[image_index as usize];
-
-            Ok((
-                image_index,
-                present_image,
-                present_complete_semaphore,
-                rendering_complete_semaphore,
-            ))
+            Ok((image_index, present_image))
         }
     }
 
@@ -561,7 +568,6 @@ impl Swapchain {
                 .swapchain_device
                 .queue_present(self.device.queue, &present_info)?;
 
-            self.frame_count += 1;
             Ok(())
         }
     }
@@ -772,23 +778,23 @@ impl ComputePipeline {
         }
     }
 
-    fn dispatch(&self, camera_transform: &Transform, time_millis: u32) {
+    fn dispatch(&self, frame: &Frame, camera_transform: &Transform, time_millis: u32) {
         unsafe {
             self.device.transition_image(
-                self.device.command_buffer,
+                frame.command_buffer,
                 self.storage_image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::GENERAL,
             );
 
             self.device.device.cmd_bind_pipeline(
-                self.device.command_buffer,
+                frame.command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipeline,
             );
 
             self.device.device.cmd_bind_descriptor_sets(
-                self.device.command_buffer,
+                frame.command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipeline_layout,
                 0,
@@ -806,7 +812,7 @@ impl ComputePipeline {
             };
 
             self.device.device.cmd_push_constants(
-                self.device.command_buffer,
+                frame.command_buffer,
                 self.pipeline_layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
@@ -814,7 +820,7 @@ impl ComputePipeline {
             );
 
             self.device.device.cmd_dispatch(
-                self.device.command_buffer,
+                frame.command_buffer,
                 self.storage_image_extent.width.div_ceil(16),
                 self.storage_image_extent.height.div_ceil(16),
                 1,
@@ -822,17 +828,17 @@ impl ComputePipeline {
         }
     }
 
-    fn blit(&self, present_image: vk::Image, present_image_extent: vk::Extent2D) {
+    fn blit(&self, frame: &Frame, present_image: vk::Image, present_image_extent: vk::Extent2D) {
         unsafe {
             self.device.transition_image(
-                self.device.command_buffer,
+                frame.command_buffer,
                 self.storage_image,
                 vk::ImageLayout::GENERAL,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             );
 
             self.device.transition_image(
-                self.device.command_buffer,
+                frame.command_buffer,
                 present_image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -868,7 +874,7 @@ impl ComputePipeline {
                 .dst_offsets(dst_offsets);
 
             self.device.device.cmd_blit_image(
-                self.device.command_buffer,
+                frame.command_buffer,
                 self.storage_image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 present_image,
@@ -878,14 +884,14 @@ impl ComputePipeline {
             );
 
             self.device.transition_image(
-                self.device.command_buffer,
+                frame.command_buffer,
                 self.storage_image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 vk::ImageLayout::GENERAL,
             );
 
             self.device.transition_image(
-                self.device.command_buffer,
+                frame.command_buffer,
                 present_image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::PRESENT_SRC_KHR,
