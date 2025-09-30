@@ -1,4 +1,4 @@
-use std::{ffi::c_char, sync::Arc, time::Instant};
+use std::{ffi::c_char, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use ash::{khr, vk};
@@ -89,9 +89,10 @@ fn setup_renderer(
 fn render(
     mut renderer: ResMut<Renderer>,
     query: Query<&Transform, With<Camera>>,
+    time: Res<Time>,
 ) -> Result<(), BevyError> {
     let camera_transform = query.single()?;
-    renderer.render(camera_transform)?;
+    renderer.render(time.elapsed(), camera_transform)?;
     Ok(())
 }
 
@@ -104,7 +105,6 @@ pub struct Renderer {
     compute_pipeline: ComputePipeline,
     frames: Vec<Frame>,
     frame_index: usize,
-    start_time: Instant,
 }
 
 impl Renderer {
@@ -143,7 +143,6 @@ impl Renderer {
             .collect::<Result<Vec<_>, _>>()?;
 
         let frame_index = 0;
-        let start_time = Instant::now();
 
         Ok(Self {
             device,
@@ -151,11 +150,10 @@ impl Renderer {
             compute_pipeline,
             frames,
             frame_index,
-            start_time,
         })
     }
 
-    pub fn render(&mut self, camera_transform: &Transform) -> Result<()> {
+    pub fn render(&mut self, elapsed: Duration, camera_transform: &Transform) -> Result<()> {
         let frame = &self.frames[self.frame_index];
 
         self.device.begin_frame(frame)?;
@@ -164,7 +162,7 @@ impl Renderer {
             .swapchain
             .acquire_next_image(frame.present_complete_semaphore)?;
 
-        let time_millis = Instant::now().duration_since(self.start_time).as_millis() as u32;
+        let time_millis = elapsed.as_millis() as u32;
 
         self.compute_pipeline
             .dispatch(frame, camera_transform, time_millis);
