@@ -103,7 +103,7 @@ pub struct Renderer {
     swapchain: Swapchain,
     compute_pipeline: ComputePipeline,
     frames: Vec<Frame>,
-    frame_count: usize,
+    frame_index: usize,
     start_time: Instant,
 }
 
@@ -142,7 +142,7 @@ impl Renderer {
             .map(|command_buffer| Frame::new(&device, command_buffer))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let frame_count = 0;
+        let frame_index = 0;
         let start_time = Instant::now();
 
         Ok(Self {
@@ -150,14 +150,13 @@ impl Renderer {
             swapchain,
             compute_pipeline,
             frames,
-            frame_count,
+            frame_index,
             start_time,
         })
     }
 
     pub fn render(&mut self, camera_transform: &Transform) -> Result<()> {
-        let frame_index = self.frame_count % self.frames.len();
-        let frame = &self.frames[frame_index];
+        let frame = &self.frames[self.frame_index];
 
         self.device.begin_frame(frame)?;
 
@@ -178,7 +177,7 @@ impl Renderer {
         self.swapchain
             .present_image(image_index, frame.rendering_complete_semaphore)?;
 
-        self.frame_count += 1;
+        self.frame_index = (self.frame_index + 1) % self.frames.len();
 
         Ok(())
     }
