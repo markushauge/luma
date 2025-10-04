@@ -101,7 +101,7 @@ fn render(
     Ok(())
 }
 
-const MAX_CONCURRENT_FRAMES: u32 = 2;
+const MAX_FRAMES_IN_FLIGHT: u32 = 2;
 
 #[derive(Resource)]
 pub struct Renderer {
@@ -126,7 +126,7 @@ impl Renderer {
 
         let command_buffers = unsafe {
             let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(MAX_CONCURRENT_FRAMES)
+                .command_buffer_count(MAX_FRAMES_IN_FLIGHT)
                 .command_pool(device.command_pool)
                 .level(vk::CommandBufferLevel::PRIMARY);
 
