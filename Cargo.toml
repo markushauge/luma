@@ -28,4 +28,4 @@ features = [
     "bevy_window",
     "bevy_winit",
 ]
-version = "0.16.1"
+version = "0.17.2"

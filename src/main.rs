@@ -47,7 +47,7 @@ fn update_window_title(
 
     match timer.as_mut() {
         Some(timer) => {
-            if !timer.tick(time.delta()).finished() {
+            if !timer.tick(time.delta()).is_finished() {
                 return;
             }
         }

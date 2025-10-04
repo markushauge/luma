@@ -3,7 +3,7 @@
 use bevy::{
     input::mouse::MouseMotion,
     prelude::*,
-    window::{CursorGrabMode, PrimaryWindow},
+    window::{CursorGrabMode, CursorOptions, PrimaryWindow},
 };
 
 // TODO: Make configurable
@@ -29,12 +29,17 @@ pub struct Camera;
 
 fn update_transform(
     window: Query<&Window, With<PrimaryWindow>>,
+    cursor_options: Query<&CursorOptions, With<PrimaryWindow>>,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    mut state: EventReader<MouseMotion>,
+    mut messages: MessageReader<MouseMotion>,
     mut query: Query<&mut Transform, With<Camera>>,
 ) {
     let Ok(window) = window.single() else {
+        return;
+    };
+
+    let Ok(cursor_options) = cursor_options.single() else {
         return;
     };
 
@@ -42,7 +47,7 @@ fn update_transform(
         return;
     };
 
-    if window.cursor_options.grab_mode != CursorGrabMode::Confined {
+    if cursor_options.grab_mode != CursorGrabMode::Confined {
         return;
     }
 
@@ -78,11 +83,11 @@ fn update_transform(
     velocity = velocity.normalize_or_zero();
     transform.translation += velocity * time.delta_secs() * MOVE_SENSITIVITY;
 
-    for event in state.read() {
+    for message in messages.read() {
         let (mut yaw, mut pitch, roll) = transform.rotation.to_euler(EulerRot::YXZ);
         let window_scale = window.height().min(window.width());
-        pitch -= (LOOK_SENSITIVITY * event.delta.y * window_scale).to_radians();
-        yaw -= (LOOK_SENSITIVITY * event.delta.x * window_scale).to_radians();
+        pitch -= (LOOK_SENSITIVITY * message.delta.y * window_scale).to_radians();
+        yaw -= (LOOK_SENSITIVITY * message.delta.x * window_scale).to_radians();
         pitch = pitch.clamp(-1.54, 1.54);
         transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
     }
@@ -152,21 +157,21 @@ fn update_transform_gamepad(
 }
 
 fn update_cursor_grab(
-    mut window: Query<&mut Window, With<PrimaryWindow>>,
+    mut cursor_options: Query<&mut CursorOptions, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
-    let Ok(mut window) = window.single_mut() else {
+    let Ok(mut cursor_options) = cursor_options.single_mut() else {
         return;
     };
 
     if mouse.just_pressed(MouseButton::Left) {
-        window.cursor_options.grab_mode = CursorGrabMode::Confined;
-        window.cursor_options.visible = false;
+        cursor_options.grab_mode = CursorGrabMode::Confined;
+        cursor_options.visible = false;
     }
 
     if keys.just_pressed(KeyCode::Escape) {
-        window.cursor_options.grab_mode = CursorGrabMode::None;
-        window.cursor_options.visible = true;
+        cursor_options.grab_mode = CursorGrabMode::None;
+        cursor_options.visible = true;
     }
 }
