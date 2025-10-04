@@ -1,11 +1,11 @@
 mod compute_pipeline;
 mod device;
+mod frame;
 mod swapchain;
 
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
-use ash::vk;
+use anyhow::Result;
 use bevy::{
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
@@ -16,7 +16,7 @@ use crate::{
     shader::{Shader, ShaderPlugin},
 };
 
-use self::{compute_pipeline::ComputePipeline, device::Device, swapchain::Swapchain};
+use self::{compute_pipeline::ComputePipeline, device::Device, frame::Frame, swapchain::Swapchain};
 
 #[derive(Resource, Clone)]
 pub struct RendererSettings {
@@ -175,185 +175,5 @@ impl Renderer {
         self.frame_index = (self.frame_index + 1) % self.frames.len();
 
         Ok(())
-    }
-}
-
-#[allow(dead_code)]
-struct Frame {
-    command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    present_complete_semaphore: vk::Semaphore,
-    rendering_complete_semaphore: vk::Semaphore,
-    fence: vk::Fence,
-    storage_image: vk::Image,
-    storage_image_extent: vk::Extent3D,
-    storage_image_memory: vk::DeviceMemory,
-    storage_image_view: vk::ImageView,
-    descriptor_pool: vk::DescriptorPool,
-    descriptor_set: vk::DescriptorSet,
-}
-
-impl Frame {
-    fn new(
-        device: &Device,
-        width: u32,
-        height: u32,
-        descriptor_set_layout_bindings: &[vk::DescriptorSetLayoutBinding<'_>],
-        descriptor_set_layout: vk::DescriptorSetLayout,
-    ) -> Result<Self> {
-        unsafe {
-            let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-                .queue_family_index(device.queue_family_index);
-
-            let command_pool = device
-                .device
-                .create_command_pool(&command_pool_create_info, None)?;
-
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(1)
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY);
-
-            let [command_buffer] = device
-                .device
-                .allocate_command_buffers(&command_buffer_allocate_info)?
-                .try_into()
-                .map_err(|_| anyhow!("Failed to allocate exactly one command buffer"))?;
-
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            let present_complete_semaphore = device
-                .device
-                .create_semaphore(&semaphore_create_info, None)?;
-
-            let rendering_complete_semaphore = device
-                .device
-                .create_semaphore(&semaphore_create_info, None)?;
-
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-            let fence = device.device.create_fence(&fence_create_info, None)?;
-
-            let storage_image_extent = vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            };
-
-            let storage_image_create_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .extent(storage_image_extent)
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let storage_image = device
-                .device
-                .create_image(&storage_image_create_info, None)?;
-
-            let device_memory_properties = device
-                .instance
-                .get_physical_device_memory_properties(device.physical_device);
-
-            let image_memory_requirements =
-                device.device.get_image_memory_requirements(storage_image);
-
-            let memory_type_index = (0..vk::MAX_MEMORY_TYPES)
-                .find(|i| {
-                    (image_memory_requirements.memory_type_bits & (1 << i)) != 0
-                        && device_memory_properties.memory_types[*i]
-                            .property_flags
-                            .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                })
-                .ok_or_else(|| anyhow!("No suitable memory type for storage image"))?;
-
-            let memory_allocate_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(image_memory_requirements.size)
-                .memory_type_index(memory_type_index as u32);
-
-            let storage_image_memory =
-                device.device.allocate_memory(&memory_allocate_info, None)?;
-
-            device
-                .device
-                .bind_image_memory(storage_image, storage_image_memory, 0)?;
-
-            let storage_image_view_info = vk::ImageViewCreateInfo::default()
-                .image(storage_image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-
-            let storage_image_view = device
-                .device
-                .create_image_view(&storage_image_view_info, None)?;
-
-            let pool_sizes = descriptor_set_layout_bindings
-                .iter()
-                .map(|binding| {
-                    vk::DescriptorPoolSize::default()
-                        .ty(binding.descriptor_type)
-                        .descriptor_count(binding.descriptor_count)
-                })
-                .collect::<Vec<_>>();
-
-            let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
-                .max_sets(1)
-                .pool_sizes(&pool_sizes);
-
-            let descriptor_pool = device
-                .device
-                .create_descriptor_pool(&descriptor_pool_create_info, None)?;
-
-            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(descriptor_pool)
-                .set_layouts(std::slice::from_ref(&descriptor_set_layout));
-
-            let [descriptor_set] = device
-                .device
-                .allocate_descriptor_sets(&descriptor_set_allocate_info)?
-                .try_into()
-                .map_err(|_| anyhow!("Failed to allocate exactly one descriptor set"))?;
-
-            let image_info = vk::DescriptorImageInfo::default()
-                .image_view(storage_image_view)
-                .image_layout(vk::ImageLayout::GENERAL);
-
-            let write_descriptor_set = vk::WriteDescriptorSet::default()
-                .dst_set(descriptor_set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .image_info(std::slice::from_ref(&image_info));
-
-            device
-                .device
-                .update_descriptor_sets(&[write_descriptor_set], &[]);
-
-            Ok(Self {
-                command_pool,
-                command_buffer,
-                present_complete_semaphore,
-                rendering_complete_semaphore,
-                fence,
-                storage_image,
-                storage_image_extent,
-                storage_image_memory,
-                storage_image_view,
-                descriptor_pool,
-                descriptor_set,
-            })
-        }
     }
 }
