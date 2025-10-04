@@ -63,22 +63,12 @@ impl ComputePipeline {
                 .stage(shader_stage_create_info)
                 .layout(pipeline_layout);
 
-            let pipelines_result = device.device.create_compute_pipelines(
-                vk::PipelineCache::null(),
-                &[pipeline_create_info],
-                None,
-            );
-
-            let pipeline = match pipelines_result {
-                Ok(pipelines) => pipelines[0],
-                Err((pipelines, err)) => {
-                    if !pipelines.is_empty() {
-                        pipelines[0]
-                    } else {
-                        return Err(anyhow!("Failed to create compute pipeline: {:?}", err));
-                    }
-                }
-            };
+            let [pipeline] = device
+                .device
+                .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+                .map_err(|(_, result)| anyhow!("Failed to create compute pipeline: {:?}", result))?
+                .try_into()
+                .map_err(|_| anyhow!("Failed to create exactly one compute pipeline"))?;
 
             device
                 .device
