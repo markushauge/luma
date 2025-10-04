@@ -13,7 +13,7 @@ opt-level = 3
 anyhow = "1.0.100"
 ash = "0.38.0"
 ash-window = "0.13.0"
-bytemuck = { version = "1.23.2", features = ["derive"] }
+bytemuck = { version = "1.24.0", features = ["derive"] }
 raw-window-handle = "0.6.2"
 shaderc = "0.10.1"
 tracing = "0.1.41"
