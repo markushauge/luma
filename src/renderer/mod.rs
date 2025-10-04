@@ -124,26 +124,13 @@ impl Renderer {
         let swapchain = Swapchain::new(device.clone(), raw_handles, width, height)?;
         let compute_pipeline = ComputePipeline::new(device.clone(), shader)?;
 
-        let command_buffers = unsafe {
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(MAX_FRAMES_IN_FLIGHT)
-                .command_pool(device.command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY);
-
-            device
-                .device
-                .allocate_command_buffers(&command_buffer_allocate_info)?
-        };
-
         let frame_width = (width as f32 * settings.resolution_scaling) as u32;
         let frame_height = (height as f32 * settings.resolution_scaling) as u32;
 
-        let frames = command_buffers
-            .into_iter()
-            .map(|command_buffer| {
+        let frames = (0..MAX_FRAMES_IN_FLIGHT)
+            .map(|_| {
                 Frame::new(
                     &device,
-                    command_buffer,
                     frame_width,
                     frame_height,
                     &compute_pipeline.descriptor_set_layout_bindings,
@@ -193,6 +180,7 @@ impl Renderer {
 
 #[allow(dead_code)]
 struct Frame {
+    command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
     present_complete_semaphore: vk::Semaphore,
     rendering_complete_semaphore: vk::Semaphore,
@@ -208,13 +196,31 @@ struct Frame {
 impl Frame {
     fn new(
         device: &Device,
-        command_buffer: vk::CommandBuffer,
         width: u32,
         height: u32,
         descriptor_set_layout_bindings: &[vk::DescriptorSetLayoutBinding<'_>],
         descriptor_set_layout: vk::DescriptorSetLayout,
     ) -> Result<Self> {
         unsafe {
+            let command_pool_create_info = vk::CommandPoolCreateInfo::default()
+                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+                .queue_family_index(device.queue_family_index);
+
+            let command_pool = device
+                .device
+                .create_command_pool(&command_pool_create_info, None)?;
+
+            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+                .command_buffer_count(1)
+                .command_pool(command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY);
+
+            let [command_buffer] = device
+                .device
+                .allocate_command_buffers(&command_buffer_allocate_info)?
+                .try_into()
+                .map_err(|_| anyhow!("Failed to allocate exactly one command buffer"))?;
+
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
             let present_complete_semaphore = device
@@ -315,9 +321,11 @@ impl Frame {
                 .descriptor_pool(descriptor_pool)
                 .set_layouts(std::slice::from_ref(&descriptor_set_layout));
 
-            let descriptor_set = device
+            let [descriptor_set] = device
                 .device
-                .allocate_descriptor_sets(&descriptor_set_allocate_info)?[0];
+                .allocate_descriptor_sets(&descriptor_set_allocate_info)?
+                .try_into()
+                .map_err(|_| anyhow!("Failed to allocate exactly one descriptor set"))?;
 
             let image_info = vk::DescriptorImageInfo::default()
                 .image_view(storage_image_view)
@@ -334,6 +342,7 @@ impl Frame {
                 .update_descriptor_sets(&[write_descriptor_set], &[]);
 
             Ok(Self {
+                command_pool,
                 command_buffer,
                 present_complete_semaphore,
                 rendering_complete_semaphore,

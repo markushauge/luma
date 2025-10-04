@@ -19,7 +19,6 @@ pub struct DeviceInner {
     pub device: ash::Device,
     pub swapchain_device: khr::swapchain::Device,
     pub queue: vk::Queue,
-    pub command_pool: vk::CommandPool,
 }
 
 impl Device {
@@ -81,12 +80,6 @@ impl Device {
             let swapchain_device = khr::swapchain::Device::new(&instance, &device);
             let queue = device.get_device_queue(queue_family_index, 0);
 
-            let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-                .queue_family_index(queue_family_index);
-
-            let command_pool = device.create_command_pool(&command_pool_create_info, None)?;
-
             let inner = DeviceInner {
                 entry,
                 instance,
@@ -96,7 +89,6 @@ impl Device {
                 device,
                 swapchain_device,
                 queue,
-                command_pool,
             };
 
             Ok(Self(Arc::new(inner)))
