@@ -15,6 +15,7 @@ pub struct DeviceInner {
     pub instance: ash::Instance,
     pub surface_instance: khr::surface::Instance,
     pub physical_device: vk::PhysicalDevice,
+    pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     pub queue_family_index: u32,
     pub device: ash::Device,
     pub swapchain_device: khr::swapchain::Device,
@@ -58,6 +59,9 @@ impl Device {
                 })
                 .ok_or_else(|| anyhow!("No suitable physical device found"))?;
 
+            let device_memory_properties =
+                instance.get_physical_device_memory_properties(physical_device);
+
             let queue_create_info = vk::DeviceQueueCreateInfo::default()
                 .queue_family_index(queue_family_index)
                 .queue_priorities(&[1.0]);
@@ -85,6 +89,7 @@ impl Device {
                 instance,
                 surface_instance,
                 physical_device,
+                device_memory_properties,
                 queue_family_index,
                 device,
                 swapchain_device,
@@ -167,6 +172,23 @@ impl Device {
                 &[barrier],
             );
         }
+    }
+
+    pub fn find_memory_type(
+        &self,
+        requirements: &vk::MemoryRequirements,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Result<u32> {
+        let memory_type_index = (0..vk::MAX_MEMORY_TYPES)
+            .find(|i| {
+                (requirements.memory_type_bits & (1 << i)) != 0
+                    && self.device_memory_properties.memory_types[*i]
+                        .property_flags
+                        .contains(properties)
+            })
+            .ok_or_else(|| anyhow!("No suitable memory type found"))?;
+
+        Ok(memory_type_index as u32)
     }
 
     fn api_version() -> u32 {

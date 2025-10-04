@@ -82,25 +82,17 @@ impl Frame {
                 .device
                 .create_image(&storage_image_create_info, None)?;
 
-            let device_memory_properties = device
-                .instance
-                .get_physical_device_memory_properties(device.physical_device);
-
             let image_memory_requirements =
                 device.device.get_image_memory_requirements(storage_image);
 
-            let memory_type_index = (0..vk::MAX_MEMORY_TYPES)
-                .find(|i| {
-                    (image_memory_requirements.memory_type_bits & (1 << i)) != 0
-                        && device_memory_properties.memory_types[*i]
-                            .property_flags
-                            .contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                })
-                .ok_or_else(|| anyhow!("No suitable memory type for storage image"))?;
+            let memory_type_index = device.find_memory_type(
+                &image_memory_requirements,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )?;
 
             let memory_allocate_info = vk::MemoryAllocateInfo::default()
                 .allocation_size(image_memory_requirements.size)
-                .memory_type_index(memory_type_index as u32);
+                .memory_type_index(memory_type_index);
 
             let storage_image_memory =
                 device.device.allocate_memory(&memory_allocate_info, None)?;
