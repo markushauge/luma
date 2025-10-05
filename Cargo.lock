@@ -1834,6 +1834,7 @@ dependencies = [
  "bytemuck",
  "gpu-allocator",
  "raw-window-handle",
+ "serde",
  "shaderc",
  "tracing",
 ]

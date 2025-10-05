@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{ffi::CString, path::Path};
 
 use anyhow::{Error, Result, anyhow};
 use bevy::{
@@ -6,6 +6,7 @@ use bevy::{
     prelude::*,
     tasks::ConditionalSendFuture,
 };
+use serde::{Deserialize, Serialize};
 
 pub struct ShaderPlugin;
 
@@ -19,6 +20,12 @@ impl Plugin for ShaderPlugin {
 #[derive(Asset, TypePath)]
 pub struct Shader {
     pub code: Vec<u32>,
+    pub entry_point: CString,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub struct ShaderSettings {
+    pub entry_point: Option<String>,
 }
 
 pub struct ShaderLoader {
@@ -34,13 +41,13 @@ impl Default for ShaderLoader {
 
 impl AssetLoader for ShaderLoader {
     type Asset = Shader;
-    type Settings = ();
+    type Settings = ShaderSettings;
     type Error = Error;
 
     fn load(
         &self,
         reader: &mut dyn Reader,
-        _settings: &Self::Settings,
+        settings: &Self::Settings,
         load_context: &mut LoadContext,
     ) -> impl ConditionalSendFuture<Output = Result<Self::Asset, Self::Error>> {
         Box::pin(async move {
@@ -70,9 +77,15 @@ impl AssetLoader for ShaderLoader {
             let mut options = shaderc::CompileOptions::new()?;
             options.set_include_callback(include_callback);
 
-            let artifact =
-                self.compiler
-                    .compile_into_spirv(&source, kind, path, "main", Some(&options))?;
+            let entry_point = settings.entry_point.as_deref().unwrap_or("main");
+
+            let artifact = self.compiler.compile_into_spirv(
+                &source,
+                kind,
+                path,
+                entry_point,
+                Some(&options),
+            )?;
 
             if artifact.get_num_warnings() > 0 {
                 tracing::warn!(
@@ -82,7 +95,8 @@ impl AssetLoader for ShaderLoader {
             }
 
             let code = artifact.as_binary().to_vec();
-            Ok(Shader { code })
+            let entry_point = CString::new(entry_point)?;
+            Ok(Shader { code, entry_point })
         })
     }
 }

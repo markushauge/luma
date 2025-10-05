@@ -57,7 +57,7 @@ impl ComputePipeline {
             let shader_stage_create_info = vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::COMPUTE)
                 .module(compute_shader_module)
-                .name(c"main");
+                .name(&shader.entry_point);
 
             let pipeline_create_info = vk::ComputePipelineCreateInfo::default()
                 .stage(shader_stage_create_info)
