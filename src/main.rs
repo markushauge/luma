@@ -65,7 +65,7 @@ fn update_window_title(
     };
 
     window.title = format!(
-        "Lys ({:.0} FPS, {:.2} ms)",
+        "Luma ({:.0} FPS, {:.2} ms)",
         fps.smoothed().unwrap_or_default(),
         frame_time.smoothed().unwrap_or_default()
     );
