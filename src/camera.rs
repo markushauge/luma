@@ -52,9 +52,8 @@ fn update_transform(
     }
 
     let mut velocity = Vec3::ZERO;
-    let local_z = transform.local_z();
-    let forward = -local_z.as_vec3();
-    let right = forward.cross(Vec3::Y);
+    let forward = -transform.local_z().as_vec3();
+    let right = transform.local_x().as_vec3();
 
     for key in keys.get_pressed() {
         match key {
@@ -104,9 +103,8 @@ fn update_transform_gamepad(
 
     for gamepad in gamepads.iter() {
         let mut velocity = Vec3::ZERO;
-        let local_z = transform.local_z();
-        let forward = -local_z.as_vec3();
-        let right = forward.cross(Vec3::Y);
+        let forward = -transform.local_z().as_vec3();
+        let right = transform.local_x().as_vec3();
 
         if let (Some(x), Some(y)) = (
             gamepad.get(GamepadAxis::LeftStickX),
