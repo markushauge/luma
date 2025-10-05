@@ -1,8 +1,12 @@
-use std::{ffi::c_char, sync::Arc};
+use std::{
+    ffi::c_char,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Result, anyhow};
 use ash::{khr, vk};
 use bevy::{prelude::*, window::RawHandleWrapper};
+use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 
 use super::Frame;
 
@@ -20,6 +24,7 @@ pub struct DeviceInner {
     pub device: ash::Device,
     pub swapchain_device: khr::swapchain::Device,
     pub queue: vk::Queue,
+    pub allocator: Mutex<Allocator>,
 }
 
 impl Device {
@@ -84,6 +89,15 @@ impl Device {
             let swapchain_device = khr::swapchain::Device::new(&instance, &device);
             let queue = device.get_device_queue(queue_family_index, 0);
 
+            let allocator = Mutex::new(Allocator::new(&AllocatorCreateDesc {
+                instance: instance.clone(),
+                device: device.clone(),
+                physical_device,
+                debug_settings: Default::default(),
+                buffer_device_address: false,
+                allocation_sizes: Default::default(),
+            })?);
+
             let inner = DeviceInner {
                 entry,
                 instance,
@@ -94,6 +108,7 @@ impl Device {
                 device,
                 swapchain_device,
                 queue,
+                allocator,
             };
 
             Ok(Self(Arc::new(inner)))
@@ -174,21 +189,16 @@ impl Device {
         }
     }
 
-    pub fn find_memory_type(
-        &self,
-        requirements: &vk::MemoryRequirements,
-        properties: vk::MemoryPropertyFlags,
-    ) -> Result<u32> {
-        let memory_type_index = (0..vk::MAX_MEMORY_TYPES)
-            .find(|i| {
-                (requirements.memory_type_bits & (1 << i)) != 0
-                    && self.device_memory_properties.memory_types[*i]
-                        .property_flags
-                        .contains(properties)
-            })
-            .ok_or_else(|| anyhow!("No suitable memory type found"))?;
+    pub fn allocate(&self, desc: &AllocationCreateDesc) -> Result<Allocation> {
+        let mut allocator = self.allocator.lock().unwrap();
+        let allocation = allocator.allocate(desc)?;
+        Ok(allocation)
+    }
 
-        Ok(memory_type_index as u32)
+    pub fn free(&self, allocation: Allocation) -> Result<()> {
+        let mut allocator = self.allocator.lock().unwrap();
+        allocator.free(allocation)?;
+        Ok(())
     }
 
     fn api_version() -> u32 {

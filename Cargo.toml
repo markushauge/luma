@@ -29,3 +29,8 @@ features = [
     "bevy_winit",
 ]
 version = "0.17.2"
+
+[dependencies.gpu-allocator]
+default-features = false
+features = ["std", "vulkan"]
+version = "0.28.0"

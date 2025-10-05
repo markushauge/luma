@@ -1,5 +1,9 @@
 use anyhow::{Result, anyhow};
 use ash::vk;
+use gpu_allocator::{
+    MemoryLocation,
+    vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
+};
 
 use super::Device;
 
@@ -12,7 +16,7 @@ pub struct Frame {
     pub fence: vk::Fence,
     pub storage_image: vk::Image,
     pub storage_image_extent: vk::Extent3D,
-    pub storage_image_memory: vk::DeviceMemory,
+    pub storage_image_allocation: Allocation,
     pub storage_image_view: vk::ImageView,
     pub descriptor_pool: vk::DescriptorPool,
     pub descriptor_set: vk::DescriptorSet,
@@ -82,24 +86,21 @@ impl Frame {
                 .device
                 .create_image(&storage_image_create_info, None)?;
 
-            let image_memory_requirements =
-                device.device.get_image_memory_requirements(storage_image);
+            let requirements = device.device.get_image_memory_requirements(storage_image);
 
-            let memory_type_index = device.find_memory_type(
-                &image_memory_requirements,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            let storage_image_allocation = device.allocate(&AllocationCreateDesc {
+                name: "Compute Pipeline Storage Image",
+                requirements,
+                location: MemoryLocation::GpuOnly,
+                linear: true,
+                allocation_scheme: AllocationScheme::DedicatedImage(storage_image),
+            })?;
+
+            device.device.bind_image_memory(
+                storage_image,
+                storage_image_allocation.memory(),
+                storage_image_allocation.offset(),
             )?;
-
-            let memory_allocate_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(image_memory_requirements.size)
-                .memory_type_index(memory_type_index);
-
-            let storage_image_memory =
-                device.device.allocate_memory(&memory_allocate_info, None)?;
-
-            device
-                .device
-                .bind_image_memory(storage_image, storage_image_memory, 0)?;
 
             let storage_image_view_info = vk::ImageViewCreateInfo::default()
                 .image(storage_image)
@@ -166,11 +167,48 @@ impl Frame {
                 fence,
                 storage_image,
                 storage_image_extent,
-                storage_image_memory,
+                storage_image_allocation,
                 storage_image_view,
                 descriptor_pool,
                 descriptor_set,
             })
+        }
+    }
+
+    pub fn destroy(self, device: &Device) {
+        unsafe {
+            device
+                .device
+                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
+                .unwrap();
+
+            device
+                .device
+                .destroy_descriptor_pool(self.descriptor_pool, None);
+
+            device
+                .device
+                .destroy_image_view(self.storage_image_view, None);
+
+            device.device.destroy_image(self.storage_image, None);
+
+            device.free(self.storage_image_allocation).unwrap();
+
+            device.device.destroy_fence(self.fence, None);
+
+            device
+                .device
+                .destroy_semaphore(self.present_complete_semaphore, None);
+
+            device
+                .device
+                .destroy_semaphore(self.rendering_complete_semaphore, None);
+
+            device
+                .device
+                .free_command_buffers(self.command_pool, &[self.command_buffer]);
+
+            device.device.destroy_command_pool(self.command_pool, None);
         }
     }
 }

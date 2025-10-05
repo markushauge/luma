@@ -177,3 +177,15 @@ impl Renderer {
         Ok(())
     }
 }
+
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.device.device_wait_idle().unwrap();
+        }
+
+        for frame in self.frames.drain(..) {
+            frame.destroy(&self.device);
+        }
+    }
+}
