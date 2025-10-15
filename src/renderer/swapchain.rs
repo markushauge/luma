@@ -4,13 +4,18 @@ use bevy::window::RawHandleWrapper;
 
 use super::Device;
 
+pub struct SwapchainImage {
+    pub image: vk::Image,
+    pub semaphore: vk::Semaphore,
+}
+
 #[allow(dead_code)]
 pub struct Swapchain {
     pub device: Device,
     pub surface: vk::SurfaceKHR,
     pub surface_extent: vk::Extent2D,
     pub swapchain: vk::SwapchainKHR,
-    pub present_images: Vec<vk::Image>,
+    pub present_images: Vec<SwapchainImage>,
 }
 
 impl Swapchain {
@@ -76,9 +81,7 @@ impl Swapchain {
                 .image_color_space(surface_format.color_space)
                 .image_extent(surface_extent)
                 .image_array_layers(1)
-                .image_usage(
-                    vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
-                )
+                .image_usage(vk::ImageUsageFlags::TRANSFER_DST)
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .queue_family_indices(std::slice::from_ref(&device.queue_family_index))
                 .pre_transform(surface_capabilities.current_transform)
@@ -90,7 +93,20 @@ impl Swapchain {
                 .swapchain_device
                 .create_swapchain(&swapchain_create_info, None)?;
 
-            let present_images = device.swapchain_device.get_swapchain_images(swapchain)?;
+            let present_images = device
+                .swapchain_device
+                .get_swapchain_images(swapchain)?
+                .into_iter()
+                .map(|image| {
+                    let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+
+                    let semaphore = device
+                        .device
+                        .create_semaphore(&semaphore_create_info, None)?;
+
+                    Ok(SwapchainImage { image, semaphore })
+                })
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(Self {
                 device,
@@ -104,17 +120,17 @@ impl Swapchain {
 
     pub fn acquire_next_image(
         &self,
-        present_complete_semaphore: vk::Semaphore,
-    ) -> Result<(u32, vk::Image)> {
+        signal_semaphore: vk::Semaphore,
+    ) -> Result<(u32, &SwapchainImage)> {
         unsafe {
             let (image_index, _) = self.device.swapchain_device.acquire_next_image(
                 self.swapchain,
                 u64::MAX,
-                present_complete_semaphore,
+                signal_semaphore,
                 vk::Fence::null(),
             )?;
 
-            let present_image = self.present_images[image_index as usize];
+            let present_image = &self.present_images[image_index as usize];
             Ok((image_index, present_image))
         }
     }

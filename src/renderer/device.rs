@@ -8,8 +8,6 @@ use ash::{khr, vk};
 use bevy::{prelude::*, window::RawHandleWrapper};
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 
-use super::Frame;
-
 #[derive(Clone, Deref)]
 pub struct Device(Arc<DeviceInner>);
 
@@ -115,15 +113,14 @@ impl Device {
         }
     }
 
-    pub fn begin_frame(&self, frame: &Frame) -> Result<()> {
+    pub fn begin_frame(&self, command_buffer: vk::CommandBuffer, fence: vk::Fence) -> Result<()> {
         unsafe {
-            self.device
-                .wait_for_fences(&[frame.fence], true, u64::MAX)?;
+            self.device.wait_for_fences(&[fence], true, u64::MAX)?;
 
-            self.device.reset_fences(&[frame.fence])?;
+            self.device.reset_fences(&[fence])?;
 
             self.device.reset_command_buffer(
-                frame.command_buffer,
+                command_buffer,
                 vk::CommandBufferResetFlags::RELEASE_RESOURCES,
             )?;
 
@@ -131,24 +128,30 @@ impl Device {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
             self.device
-                .begin_command_buffer(frame.command_buffer, &command_buffer_begin_info)?;
+                .begin_command_buffer(command_buffer, &command_buffer_begin_info)?;
 
             Ok(())
         }
     }
 
-    pub fn end_frame(&self, frame: &Frame) -> Result<()> {
+    pub fn end_frame(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        wait_semaphore: vk::Semaphore,
+        signal_semaphore: vk::Semaphore,
+        fence: vk::Fence,
+    ) -> Result<()> {
         unsafe {
-            self.device.end_command_buffer(frame.command_buffer)?;
+            self.device.end_command_buffer(command_buffer)?;
 
             let submit_info = vk::SubmitInfo::default()
-                .wait_semaphores(std::slice::from_ref(&frame.present_complete_semaphore))
                 .wait_dst_stage_mask(&[vk::PipelineStageFlags::ALL_COMMANDS])
-                .command_buffers(std::slice::from_ref(&frame.command_buffer))
-                .signal_semaphores(std::slice::from_ref(&frame.rendering_complete_semaphore));
+                .command_buffers(std::slice::from_ref(&command_buffer))
+                .wait_semaphores(std::slice::from_ref(&wait_semaphore))
+                .signal_semaphores(std::slice::from_ref(&signal_semaphore));
 
             self.device
-                .queue_submit(self.queue, &[submit_info], frame.fence)?;
+                .queue_submit(self.queue, &[submit_info], fence)?;
 
             Ok(())
         }

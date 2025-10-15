@@ -11,8 +11,7 @@ use super::Device;
 pub struct Frame {
     pub command_pool: vk::CommandPool,
     pub command_buffer: vk::CommandBuffer,
-    pub present_complete_semaphore: vk::Semaphore,
-    pub rendering_complete_semaphore: vk::Semaphore,
+    pub semaphore: vk::Semaphore,
     pub fence: vk::Fence,
     pub storage_image: vk::Image,
     pub storage_image_extent: vk::Extent3D,
@@ -52,11 +51,7 @@ impl Frame {
 
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
-            let present_complete_semaphore = device
-                .device
-                .create_semaphore(&semaphore_create_info, None)?;
-
-            let rendering_complete_semaphore = device
+            let semaphore = device
                 .device
                 .create_semaphore(&semaphore_create_info, None)?;
 
@@ -162,8 +157,7 @@ impl Frame {
             Ok(Self {
                 command_pool,
                 command_buffer,
-                present_complete_semaphore,
-                rendering_complete_semaphore,
+                semaphore,
                 fence,
                 storage_image,
                 storage_image_extent,
@@ -196,13 +190,7 @@ impl Frame {
 
             device.device.destroy_fence(self.fence, None);
 
-            device
-                .device
-                .destroy_semaphore(self.present_complete_semaphore, None);
-
-            device
-                .device
-                .destroy_semaphore(self.rendering_complete_semaphore, None);
+            device.device.destroy_semaphore(self.semaphore, None);
 
             device
                 .device

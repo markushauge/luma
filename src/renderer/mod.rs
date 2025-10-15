@@ -153,11 +153,9 @@ impl Renderer {
     pub fn render(&mut self, elapsed: Duration, camera_transform: &Transform) -> Result<()> {
         let frame = &self.frames[self.frame_index];
 
-        self.device.begin_frame(frame)?;
+        self.device.begin_frame(frame.command_buffer, frame.fence)?;
 
-        let (image_index, present_image) = self
-            .swapchain
-            .acquire_next_image(frame.present_complete_semaphore)?;
+        let (image_index, present_image) = self.swapchain.acquire_next_image(frame.semaphore)?;
 
         let time_millis = elapsed.as_millis() as u32;
 
@@ -165,12 +163,17 @@ impl Renderer {
             .dispatch(frame, camera_transform, time_millis);
 
         self.compute_pipeline
-            .blit(frame, present_image, self.swapchain.surface_extent);
+            .blit(frame, present_image.image, self.swapchain.surface_extent);
 
-        self.device.end_frame(frame)?;
+        self.device.end_frame(
+            frame.command_buffer,
+            frame.semaphore,
+            present_image.semaphore,
+            frame.fence,
+        )?;
 
         self.swapchain
-            .present_image(image_index, frame.rendering_complete_semaphore)?;
+            .present_image(image_index, present_image.semaphore)?;
 
         self.frame_index = (self.frame_index + 1) % self.frames.len();
 
