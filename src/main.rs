@@ -1,4 +1,5 @@
 mod camera;
+mod panic;
 mod renderer;
 mod shader;
 
@@ -14,6 +15,8 @@ use crate::{
 };
 
 fn main() -> AppExit {
+    panic::init_hook();
+
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
