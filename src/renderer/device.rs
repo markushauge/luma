@@ -22,7 +22,7 @@ pub struct DeviceInner {
     pub device: ash::Device,
     pub swapchain_device: khr::swapchain::Device,
     pub queue: vk::Queue,
-    pub allocator: Mutex<Allocator>,
+    pub allocator: Arc<Mutex<Allocator>>,
 }
 
 impl Device {
@@ -87,14 +87,16 @@ impl Device {
             let swapchain_device = khr::swapchain::Device::new(&instance, &device);
             let queue = device.get_device_queue(queue_family_index, 0);
 
-            let allocator = Mutex::new(Allocator::new(&AllocatorCreateDesc {
+            let allocater_create_desc = AllocatorCreateDesc {
                 instance: instance.clone(),
                 device: device.clone(),
                 physical_device,
                 debug_settings: Default::default(),
                 buffer_device_address: false,
                 allocation_sizes: Default::default(),
-            })?);
+            };
+
+            let allocator = Arc::new(Mutex::new(Allocator::new(&allocater_create_desc)?));
 
             let inner = DeviceInner {
                 entry,

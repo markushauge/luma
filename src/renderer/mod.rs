@@ -1,5 +1,6 @@
 pub mod compute_pipeline;
 mod device;
+pub mod egui_renderer;
 mod schedule;
 mod swapchain;
 
@@ -62,7 +63,6 @@ fn end(mut renderer: ResMut<Renderer>) -> Result<(), BevyError> {
 }
 
 #[derive(Resource)]
-#[allow(dead_code)]
 pub struct Renderer {
     device: Device,
     swapchain: Swapchain,

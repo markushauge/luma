@@ -14,6 +14,7 @@ use crate::{
     renderer::{
         RendererPlugin,
         compute_pipeline::{ComputePipelinePlugin, ComputePipelineSettings},
+        egui_renderer::{EguiContext, EguiPass, EguiPassSystems, EguiPlugin},
     },
 };
 
@@ -30,8 +31,10 @@ fn main() -> AppExit {
                 resolution_scaling: 0.25,
             },
         })
+        .add_plugins(EguiPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, update_window_title)
+        .add_systems(EguiPass, render_ui.in_set(EguiPassSystems::Render))
         .run()
 }
 
@@ -40,6 +43,12 @@ fn setup(mut commands: Commands) {
         Camera,
         Transform::from_xyz(0.0, 0.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+}
+
+fn render_ui(ctx: Res<EguiContext>) {
+    egui::Window::new("Hello").show(&ctx, |ui| {
+        ui.label("Hello World");
+    });
 }
 
 fn update_window_title(

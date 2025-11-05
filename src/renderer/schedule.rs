@@ -6,7 +6,9 @@ use bevy::ecs::{
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum RenderSystems {
     Begin,
+    PreRender,
     Render,
+    PostRender,
     End,
 }
 
@@ -29,7 +31,9 @@ impl Render {
         schedule.configure_sets(
             (
                 RenderSystems::Begin,
+                RenderSystems::PreRender,
                 RenderSystems::Render,
+                RenderSystems::PostRender,
                 RenderSystems::End,
             )
                 .chain(),

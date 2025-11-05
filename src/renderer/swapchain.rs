@@ -6,6 +6,7 @@ use super::Device;
 
 pub struct SwapchainImage {
     pub image: vk::Image,
+    pub image_view: vk::ImageView,
     pub semaphore: vk::Semaphore,
 }
 
@@ -82,7 +83,9 @@ impl Swapchain {
                 .image_color_space(surface_format.color_space)
                 .image_extent(surface_extent)
                 .image_array_layers(1)
-                .image_usage(vk::ImageUsageFlags::TRANSFER_DST)
+                .image_usage(
+                    vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                )
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .queue_family_indices(std::slice::from_ref(&device.queue_family_index))
                 .pre_transform(surface_capabilities.current_transform)
@@ -99,13 +102,33 @@ impl Swapchain {
                 .get_swapchain_images(swapchain)?
                 .into_iter()
                 .map(|image| {
+                    let image_view_create_info = vk::ImageViewCreateInfo::default()
+                        .image(image)
+                        .view_type(vk::ImageViewType::TYPE_2D)
+                        .format(surface_format.format)
+                        .components(vk::ComponentMapping::default())
+                        .subresource_range(
+                            vk::ImageSubresourceRange::default()
+                                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                                .level_count(1)
+                                .layer_count(1),
+                        );
+
+                    let image_view = device
+                        .device
+                        .create_image_view(&image_view_create_info, None)?;
+
                     let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
                     let semaphore = device
                         .device
                         .create_semaphore(&semaphore_create_info, None)?;
 
-                    Ok(SwapchainImage { image, semaphore })
+                    Ok(SwapchainImage {
+                        image,
+                        image_view,
+                        semaphore,
+                    })
                 })
                 .collect::<Result<Vec<_>>>()?;
 
