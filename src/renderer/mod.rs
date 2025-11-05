@@ -1,5 +1,6 @@
 mod compute_pipeline;
 mod device;
+mod egui_renderer;
 mod frame;
 mod schedule;
 mod swapchain;
@@ -21,6 +22,7 @@ use crate::{
 use self::{
     compute_pipeline::ComputePipeline,
     device::Device,
+    egui_renderer::EguiRenderer,
     frame::Frame,
     schedule::{Render, RenderSystems, run_render_schedule},
     swapchain::Swapchain,
@@ -136,6 +138,7 @@ pub struct Renderer {
     device: Device,
     swapchain: Swapchain,
     compute_pipeline: ComputePipeline,
+    egui_renderer: EguiRenderer,
     frames: Vec<Frame>,
     frame_index: usize,
 }
@@ -151,6 +154,7 @@ impl Renderer {
         let device = Device::new(raw_handles)?;
         let swapchain = Swapchain::new(device.clone(), raw_handles, width, height)?;
         let compute_pipeline = ComputePipeline::new(device.clone(), shader)?;
+        let egui_renderer = EguiRenderer::new(device.clone(), MAX_FRAMES_IN_FLIGHT as usize)?;
 
         let frame_width = (width as f32 * settings.resolution_scaling) as u32;
         let frame_height = (height as f32 * settings.resolution_scaling) as u32;
@@ -173,6 +177,7 @@ impl Renderer {
             device,
             swapchain,
             compute_pipeline,
+            egui_renderer,
             frames,
             frame_index,
         })
@@ -227,6 +232,25 @@ impl Renderer {
 
         self.compute_pipeline
             .blit(frame, present_image.image, self.swapchain.surface_extent);
+
+        self.device.transition_image(
+            frame.command_buffer,
+            present_image.image,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::GENERAL,
+        );
+
+        self.egui_renderer.render(
+            frame.command_pool,
+            frame.command_buffer,
+            self.swapchain.surface_extent,
+            present_image.image_view,
+            |context| {
+                egui::Window::new("Hello").show(context, |ui| {
+                    ui.label("Hello World");
+                });
+            },
+        )?;
 
         Ok(())
     }
