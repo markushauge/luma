@@ -16,6 +16,7 @@ pub struct Swapchain {
     pub surface_extent: vk::Extent2D,
     pub swapchain: vk::SwapchainKHR,
     pub present_images: Vec<SwapchainImage>,
+    pub present_image_index: u32,
 }
 
 impl Swapchain {
@@ -108,20 +109,20 @@ impl Swapchain {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
+            let present_image_index = 0;
+
             Ok(Self {
                 device,
                 surface,
                 surface_extent,
                 swapchain,
                 present_images,
+                present_image_index,
             })
         }
     }
 
-    pub fn acquire_next_image(
-        &self,
-        signal_semaphore: vk::Semaphore,
-    ) -> Result<(u32, &SwapchainImage)> {
+    pub fn acquire_next(&mut self, signal_semaphore: vk::Semaphore) -> Result<()> {
         unsafe {
             let (image_index, _) = self.device.swapchain_device.acquire_next_image(
                 self.swapchain,
@@ -130,17 +131,19 @@ impl Swapchain {
                 vk::Fence::null(),
             )?;
 
-            let present_image = &self.present_images[image_index as usize];
-            Ok((image_index, present_image))
+            self.present_image_index = image_index;
+            Ok(())
         }
     }
 
-    pub fn present_image(&mut self, image_index: u32, wait_semaphore: vk::Semaphore) -> Result<()> {
+    pub fn present(&mut self) -> Result<()> {
+        let present_image = self.present_image();
+
         unsafe {
             let present_info = vk::PresentInfoKHR::default()
-                .wait_semaphores(std::slice::from_ref(&wait_semaphore))
+                .wait_semaphores(std::slice::from_ref(&present_image.semaphore))
                 .swapchains(std::slice::from_ref(&self.swapchain))
-                .image_indices(std::slice::from_ref(&image_index));
+                .image_indices(std::slice::from_ref(&self.present_image_index));
 
             self.device
                 .swapchain_device
@@ -148,5 +151,9 @@ impl Swapchain {
 
             Ok(())
         }
+    }
+
+    pub fn present_image(&self) -> &SwapchainImage {
+        &self.present_images[self.present_image_index as usize]
     }
 }

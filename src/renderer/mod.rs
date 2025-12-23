@@ -1,6 +1,7 @@
 mod compute_pipeline;
 mod device;
 mod frame;
+mod schedule;
 mod swapchain;
 
 use std::time::Duration;
@@ -16,7 +17,13 @@ use crate::{
     shader::{Shader, ShaderPlugin},
 };
 
-use self::{compute_pipeline::ComputePipeline, device::Device, frame::Frame, swapchain::Swapchain};
+use self::{
+    compute_pipeline::ComputePipeline,
+    device::Device,
+    frame::Frame,
+    schedule::{Render, RenderSystems, run_render_schedule},
+    swapchain::Swapchain,
+};
 
 #[derive(Resource, Clone)]
 pub struct RendererSettings {
@@ -51,13 +58,25 @@ impl Plugin for RendererPlugin {
         app.add_plugins(ShaderPlugin)
             .init_state::<RendererState>()
             .insert_resource(self.settings.clone())
+            .add_schedule(Render::schedule())
             .add_systems(OnEnter(RendererState::Loading), load_shader)
             .add_systems(
                 Update,
                 check_shader_loaded.run_if(in_state(RendererState::Loading)),
             )
             .add_systems(OnEnter(RendererState::Ready), setup_renderer)
-            .add_systems(Update, render.run_if(in_state(RendererState::Ready)));
+            .add_systems(
+                Update,
+                run_render_schedule.run_if(in_state(RendererState::Ready)),
+            )
+            .add_systems(
+                Render,
+                (
+                    begin.in_set(RenderSystems::Begin),
+                    render.in_set(RenderSystems::Render),
+                    end.in_set(RenderSystems::End),
+                ),
+            );
     }
 }
 
@@ -91,6 +110,10 @@ fn setup_renderer(
     Ok(())
 }
 
+fn begin(mut renderer: ResMut<Renderer>) -> Result<(), BevyError> {
+    renderer.begin().map_err(Into::into)
+}
+
 fn render(
     mut renderer: ResMut<Renderer>,
     query: Query<&Transform, With<Camera>>,
@@ -99,6 +122,10 @@ fn render(
     let camera_transform = query.single()?;
     renderer.render(time.elapsed(), camera_transform)?;
     Ok(())
+}
+
+fn end(mut renderer: ResMut<Renderer>) -> Result<(), BevyError> {
+    renderer.end().map_err(Into::into)
 }
 
 const MAX_FRAMES_IN_FLIGHT: u32 = 2;
@@ -150,33 +177,35 @@ impl Renderer {
         })
     }
 
-    pub fn render(&mut self, elapsed: Duration, camera_transform: &Transform) -> Result<()> {
+    pub fn begin(&mut self) -> Result<()> {
         let frame = &self.frames[self.frame_index];
-
         self.device.begin_frame(frame.command_buffer, frame.fence)?;
+        self.swapchain.acquire_next(frame.semaphore)?;
+        Ok(())
+    }
 
-        let (image_index, present_image) = self.swapchain.acquire_next_image(frame.semaphore)?;
-
-        let time_millis = elapsed.as_millis() as u32;
-
-        self.compute_pipeline
-            .dispatch(frame, camera_transform, time_millis);
-
-        self.compute_pipeline
-            .blit(frame, present_image.image, self.swapchain.surface_extent);
-
+    pub fn end(&mut self) -> Result<()> {
+        let frame = &self.frames[self.frame_index];
+        let present_image = self.swapchain.present_image();
         self.device.end_frame(
             frame.command_buffer,
             frame.semaphore,
             present_image.semaphore,
             frame.fence,
         )?;
-
-        self.swapchain
-            .present_image(image_index, present_image.semaphore)?;
-
+        self.swapchain.present()?;
         self.frame_index = (self.frame_index + 1) % self.frames.len();
+        Ok(())
+    }
 
+    pub fn render(&mut self, elapsed: Duration, camera_transform: &Transform) -> Result<()> {
+        let frame = &self.frames[self.frame_index];
+        let present_image = self.swapchain.present_image();
+        let time_millis = elapsed.as_millis() as u32;
+        self.compute_pipeline
+            .dispatch(frame, camera_transform, time_millis);
+        self.compute_pipeline
+            .blit(frame, present_image.image, self.swapchain.surface_extent);
         Ok(())
     }
 }
