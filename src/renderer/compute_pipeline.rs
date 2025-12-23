@@ -85,14 +85,23 @@ impl ComputePipeline {
     }
 
     pub fn dispatch(&self, frame: &Frame, camera_transform: &Transform, time_millis: u32) {
-        unsafe {
-            self.device.transition_image(
-                frame.command_buffer,
-                frame.storage_image,
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::GENERAL,
-            );
+        self.device.transition_image(
+            frame.command_buffer,
+            frame.storage_image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::GENERAL,
+        );
 
+        let push_constants = PushConstants {
+            viewport_width: frame.storage_image_extent.width,
+            viewport_height: frame.storage_image_extent.height,
+            camera_translation: camera_transform.translation,
+            camera_rotation: Mat3::from_quat(camera_transform.rotation),
+            camera_fov: 52.0f32.to_radians(), // TODO: Make configurable
+            time_millis,
+        };
+
+        unsafe {
             self.device.device.cmd_bind_pipeline(
                 frame.command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
@@ -107,15 +116,6 @@ impl ComputePipeline {
                 &[frame.descriptor_set],
                 &[],
             );
-
-            let push_constants = PushConstants {
-                viewport_width: frame.storage_image_extent.width,
-                viewport_height: frame.storage_image_extent.height,
-                camera_translation: camera_transform.translation,
-                camera_rotation: Mat3::from_quat(camera_transform.rotation),
-                camera_fov: 52.0f32.to_radians(), // TODO: Make configurable
-                time_millis,
-            };
 
             self.device.device.cmd_push_constants(
                 frame.command_buffer,
@@ -140,72 +140,51 @@ impl ComputePipeline {
         present_image: vk::Image,
         present_image_extent: vk::Extent2D,
     ) {
+        self.device.transition_image(
+            frame.command_buffer,
+            frame.storage_image,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::GENERAL,
+        );
+
+        let subresource = vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+
+        let x = frame.storage_image_extent.width as i32;
+        let y = frame.storage_image_extent.height as i32;
+
+        let src_offsets = [
+            vk::Offset3D { x: 0, y: 0, z: 0 },
+            vk::Offset3D { x, y, z: 1 },
+        ];
+
+        let x = present_image_extent.width as i32;
+        let y = present_image_extent.height as i32;
+
+        let dst_offsets = [
+            vk::Offset3D { x: 0, y: 0, z: 0 },
+            vk::Offset3D { x, y, z: 1 },
+        ];
+
+        let image_blit = vk::ImageBlit::default()
+            .src_subresource(subresource)
+            .src_offsets(src_offsets)
+            .dst_subresource(subresource)
+            .dst_offsets(dst_offsets);
+
         unsafe {
-            self.device.transition_image(
-                frame.command_buffer,
-                frame.storage_image,
-                vk::ImageLayout::GENERAL,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            );
-
-            self.device.transition_image(
-                frame.command_buffer,
-                present_image,
-                vk::ImageLayout::UNDEFINED,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            );
-
-            let subresource = vk::ImageSubresourceLayers {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            };
-
-            let x = frame.storage_image_extent.width as i32;
-            let y = frame.storage_image_extent.height as i32;
-
-            let src_offsets = [
-                vk::Offset3D { x: 0, y: 0, z: 0 },
-                vk::Offset3D { x, y, z: 1 },
-            ];
-
-            let x = present_image_extent.width as i32;
-            let y = present_image_extent.height as i32;
-
-            let dst_offsets = [
-                vk::Offset3D { x: 0, y: 0, z: 0 },
-                vk::Offset3D { x, y, z: 1 },
-            ];
-
-            let image_blit = vk::ImageBlit::default()
-                .src_subresource(subresource)
-                .src_offsets(src_offsets)
-                .dst_subresource(subresource)
-                .dst_offsets(dst_offsets);
-
             self.device.device.cmd_blit_image(
                 frame.command_buffer,
                 frame.storage_image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::ImageLayout::GENERAL,
                 present_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::GENERAL,
                 &[image_blit],
                 vk::Filter::LINEAR,
-            );
-
-            self.device.transition_image(
-                frame.command_buffer,
-                frame.storage_image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                vk::ImageLayout::GENERAL,
-            );
-
-            self.device.transition_image(
-                frame.command_buffer,
-                present_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::PRESENT_SRC_KHR,
             );
         }
     }

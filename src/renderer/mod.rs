@@ -7,6 +7,7 @@ mod swapchain;
 use std::time::Duration;
 
 use anyhow::Result;
+use ash::vk;
 use bevy::{
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
@@ -181,18 +182,36 @@ impl Renderer {
         let frame = &self.frames[self.frame_index];
         self.device.begin_frame(frame.command_buffer, frame.fence)?;
         self.swapchain.acquire_next(frame.semaphore)?;
+        let present_image = self.swapchain.present_image();
+
+        self.device.transition_image(
+            frame.command_buffer,
+            present_image.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::GENERAL,
+        );
+
         Ok(())
     }
 
     pub fn end(&mut self) -> Result<()> {
         let frame = &self.frames[self.frame_index];
         let present_image = self.swapchain.present_image();
+
+        self.device.transition_image(
+            frame.command_buffer,
+            present_image.image,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::PRESENT_SRC_KHR,
+        );
+
         self.device.end_frame(
             frame.command_buffer,
             frame.semaphore,
             present_image.semaphore,
             frame.fence,
         )?;
+
         self.swapchain.present()?;
         self.frame_index = (self.frame_index + 1) % self.frames.len();
         Ok(())
@@ -202,10 +221,13 @@ impl Renderer {
         let frame = &self.frames[self.frame_index];
         let present_image = self.swapchain.present_image();
         let time_millis = elapsed.as_millis() as u32;
+
         self.compute_pipeline
             .dispatch(frame, camera_transform, time_millis);
+
         self.compute_pipeline
             .blit(frame, present_image.image, self.swapchain.surface_extent);
+
         Ok(())
     }
 }
