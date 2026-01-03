@@ -11,6 +11,15 @@ pub enum RenderSystems {
 }
 
 #[derive(ScheduleLabel, Debug, Hash, PartialEq, Eq, Clone)]
+pub struct RenderStartup;
+
+impl RenderStartup {
+    pub fn schedule() -> Schedule {
+        Schedule::new(Self)
+    }
+}
+
+#[derive(ScheduleLabel, Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Render;
 
 impl Render {
@@ -28,6 +37,10 @@ impl Render {
 
         schedule
     }
+}
+
+pub fn run_render_startup_schedule(world: &mut World) {
+    world.run_schedule(RenderStartup);
 }
 
 pub fn run_render_schedule(world: &mut World) {

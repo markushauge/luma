@@ -22,7 +22,9 @@ use self::{
     compute_pipeline::ComputePipeline,
     device::Device,
     frame::Frame,
-    schedule::{Render, RenderSystems, run_render_schedule},
+    schedule::{
+        Render, RenderStartup, RenderSystems, run_render_schedule, run_render_startup_schedule,
+    },
     swapchain::Swapchain,
 };
 
@@ -59,13 +61,17 @@ impl Plugin for RendererPlugin {
         app.add_plugins(ShaderPlugin)
             .init_state::<RendererState>()
             .insert_resource(self.settings.clone())
+            .add_schedule(RenderStartup::schedule())
             .add_schedule(Render::schedule())
             .add_systems(OnEnter(RendererState::Loading), load_shader)
             .add_systems(
                 Update,
                 check_shader_loaded.run_if(in_state(RendererState::Loading)),
             )
-            .add_systems(OnEnter(RendererState::Ready), setup_renderer)
+            .add_systems(
+                OnEnter(RendererState::Ready),
+                (setup_renderer, run_render_startup_schedule).chain(),
+            )
             .add_systems(
                 Update,
                 run_render_schedule.run_if(in_state(RendererState::Ready)),
