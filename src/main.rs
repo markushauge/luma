@@ -11,7 +11,10 @@ use bevy::{
 
 use crate::{
     camera::{Camera, CameraPlugin},
-    renderer::{RendererPlugin, RendererSettings},
+    renderer::{
+        RendererPlugin,
+        compute_pipeline::{ComputePipelinePlugin, ComputePipelineSettings},
+    },
 };
 
 fn main() -> AppExit {
@@ -20,12 +23,13 @@ fn main() -> AppExit {
     App::new()
         .add_plugins(DefaultPlugins)
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
-        .add_plugins(RendererPlugin {
-            settings: RendererSettings {
+        .add_plugins(RendererPlugin)
+        .add_plugins(CameraPlugin)
+        .add_plugins(ComputePipelinePlugin {
+            settings: ComputePipelineSettings {
                 resolution_scaling: 0.25,
             },
         })
-        .add_plugins(CameraPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, update_window_title)
         .run()

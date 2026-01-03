@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use ash::vk;
+use ash::vk::{self, Extent2D};
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
 use gpu_allocator::{
@@ -7,10 +7,109 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
 };
 
-use crate::shader::Shader;
+use crate::{
+    camera::Camera,
+    renderer::{
+        Renderer,
+        schedule::{Render, RenderSystems},
+    },
+    shader::Shader,
+};
 
 use super::Device;
 
+pub struct ComputePipelinePlugin {
+    pub settings: ComputePipelineSettings,
+}
+
+impl Plugin for ComputePipelinePlugin {
+    fn build(&self, app: &mut App) {
+        app.insert_resource(self.settings.clone())
+            .add_systems(Startup, load_shader)
+            .add_systems(
+                Render,
+                (create_compute_pipeline, run_compute_pipeline).in_set(RenderSystems::Render),
+            );
+    }
+}
+
+#[derive(Resource, Clone)]
+pub struct ComputePipelineSettings {
+    pub resolution_scaling: f32,
+}
+
+impl Default for ComputePipelineSettings {
+    fn default() -> Self {
+        Self {
+            resolution_scaling: 1.0,
+        }
+    }
+}
+
+#[derive(Resource)]
+struct ComputeShader(Handle<Shader>);
+
+fn load_shader(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let shader = asset_server.load("shaders/main.comp");
+    commands.insert_resource(ComputeShader(shader));
+}
+
+fn create_compute_pipeline(
+    mut commands: Commands,
+    renderer: Res<Renderer>,
+    compute_pipeline: Option<Res<ComputePipeline>>,
+    settings: Res<ComputePipelineSettings>,
+    compute_shader: Res<ComputeShader>,
+    assets: Res<Assets<Shader>>,
+) -> Result<(), BevyError> {
+    if compute_pipeline.is_some() {
+        return Ok(());
+    }
+
+    let Some(shader) = assets.get(&compute_shader.0) else {
+        return Ok(());
+    };
+
+    tracing::info!("Creating compute pipeline");
+
+    let Extent2D { width, height } = renderer.swapchain.surface_extent;
+    let width = (width as f32 * settings.resolution_scaling) as u32;
+    let height = (height as f32 * settings.resolution_scaling) as u32;
+
+    let compute_pipeline = ComputePipeline::new(renderer.device.clone(), shader, width, height)?;
+    commands.insert_resource(compute_pipeline);
+
+    Ok(())
+}
+
+fn run_compute_pipeline(
+    renderer: Res<Renderer>,
+    compute_pipeline: Option<Res<ComputePipeline>>,
+    camera_transform: Query<&Transform, With<Camera>>,
+    time: Res<Time>,
+) -> Result<(), BevyError> {
+    let Some(compute_pipeline) = compute_pipeline else {
+        return Ok(());
+    };
+
+    let camera_transform = camera_transform.single()?;
+
+    compute_pipeline.dispatch(
+        renderer.command_buffer,
+        camera_transform,
+        time.elapsed().as_millis() as u32,
+    );
+
+    compute_pipeline.blit(
+        renderer.command_buffer,
+        renderer.swapchain.present_image().image,
+        renderer.swapchain.surface_extent,
+    );
+
+    Ok(())
+}
+
+#[derive(Resource)]
 pub struct ComputePipeline {
     pub device: Device,
     pub pipeline: vk::Pipeline,
