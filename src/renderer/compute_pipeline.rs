@@ -2,22 +2,27 @@ use anyhow::{Result, anyhow};
 use ash::vk;
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
+use gpu_allocator::{
+    MemoryLocation,
+    vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
+};
 
 use crate::shader::Shader;
 
-use super::{Device, Frame};
+use super::Device;
 
-#[allow(dead_code)]
 pub struct ComputePipeline {
     pub device: Device,
     pub pipeline: vk::Pipeline,
     pub pipeline_layout: vk::PipelineLayout,
-    pub descriptor_set_layout_bindings: Vec<vk::DescriptorSetLayoutBinding<'static>>,
-    pub descriptor_set_layout: vk::DescriptorSetLayout,
+    pub storage_image: vk::Image,
+    pub storage_image_allocation: Allocation,
+    pub storage_image_extent: vk::Extent3D,
+    pub descriptor_set: vk::DescriptorSet,
 }
 
 impl ComputePipeline {
-    pub fn new(device: Device, shader: &Shader) -> Result<Self> {
+    pub fn new(device: Device, shader: &Shader, width: u32, height: u32) -> Result<Self> {
         unsafe {
             let shader_module_create_info =
                 vk::ShaderModuleCreateInfo::default().code(&shader.code);
@@ -26,13 +31,11 @@ impl ComputePipeline {
                 .device
                 .create_shader_module(&shader_module_create_info, None)?;
 
-            let descriptor_set_layout_bindings = vec![
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                    .descriptor_count(1)
-                    .stage_flags(vk::ShaderStageFlags::COMPUTE),
-            ];
+            let descriptor_set_layout_bindings = [vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)];
 
             let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
                 .bindings(&descriptor_set_layout_bindings);
@@ -74,27 +77,128 @@ impl ComputePipeline {
                 .device
                 .destroy_shader_module(compute_shader_module, None);
 
+            let storage_image_extent = vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            };
+
+            let storage_image_create_info = vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(vk::Format::R8G8B8A8_UNORM)
+                .extent(storage_image_extent)
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+            let storage_image = device
+                .device
+                .create_image(&storage_image_create_info, None)?;
+
+            let requirements = device.device.get_image_memory_requirements(storage_image);
+
+            let storage_image_allocation = device.allocate(&AllocationCreateDesc {
+                name: "Compute Pipeline Storage Image",
+                requirements,
+                location: MemoryLocation::GpuOnly,
+                linear: true,
+                allocation_scheme: AllocationScheme::DedicatedImage(storage_image),
+            })?;
+
+            device.device.bind_image_memory(
+                storage_image,
+                storage_image_allocation.memory(),
+                storage_image_allocation.offset(),
+            )?;
+
+            let storage_image_view_info = vk::ImageViewCreateInfo::default()
+                .image(storage_image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(vk::Format::R8G8B8A8_UNORM)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                });
+
+            let storage_image_view = device
+                .device
+                .create_image_view(&storage_image_view_info, None)?;
+
+            let pool_sizes = descriptor_set_layout_bindings
+                .iter()
+                .map(|binding| {
+                    vk::DescriptorPoolSize::default()
+                        .ty(binding.descriptor_type)
+                        .descriptor_count(binding.descriptor_count)
+                })
+                .collect::<Vec<_>>();
+
+            let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
+                .max_sets(1)
+                .pool_sizes(&pool_sizes);
+
+            let descriptor_pool = device
+                .device
+                .create_descriptor_pool(&descriptor_pool_create_info, None)?;
+
+            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(descriptor_pool)
+                .set_layouts(std::slice::from_ref(&descriptor_set_layout));
+
+            let [descriptor_set] = device
+                .device
+                .allocate_descriptor_sets(&descriptor_set_allocate_info)?
+                .try_into()
+                .map_err(|_| anyhow!("Failed to allocate exactly one descriptor set"))?;
+
+            let image_info = vk::DescriptorImageInfo::default()
+                .image_view(storage_image_view)
+                .image_layout(vk::ImageLayout::GENERAL);
+
+            let write_descriptor_set = vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&image_info));
+
+            device
+                .device
+                .update_descriptor_sets(&[write_descriptor_set], &[]);
+
             Ok(Self {
                 device,
                 pipeline,
                 pipeline_layout,
-                descriptor_set_layout_bindings,
-                descriptor_set_layout,
+                storage_image,
+                storage_image_allocation,
+                storage_image_extent,
+                descriptor_set,
             })
         }
     }
 
-    pub fn dispatch(&self, frame: &Frame, camera_transform: &Transform, time_millis: u32) {
+    pub fn dispatch(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        camera_transform: &Transform,
+        time_millis: u32,
+    ) {
         self.device.transition_image(
-            frame.command_buffer,
-            frame.storage_image,
+            command_buffer,
+            self.storage_image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::GENERAL,
         );
 
         let push_constants = PushConstants {
-            viewport_width: frame.storage_image_extent.width,
-            viewport_height: frame.storage_image_extent.height,
+            viewport_width: self.storage_image_extent.width,
+            viewport_height: self.storage_image_extent.height,
             camera_translation: camera_transform.translation,
             camera_rotation: Mat3::from_quat(camera_transform.rotation),
             camera_fov: 52.0f32.to_radians(), // TODO: Make configurable
@@ -103,22 +207,22 @@ impl ComputePipeline {
 
         unsafe {
             self.device.device.cmd_bind_pipeline(
-                frame.command_buffer,
+                command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipeline,
             );
 
             self.device.device.cmd_bind_descriptor_sets(
-                frame.command_buffer,
+                command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipeline_layout,
                 0,
-                &[frame.descriptor_set],
+                &[self.descriptor_set],
                 &[],
             );
 
             self.device.device.cmd_push_constants(
-                frame.command_buffer,
+                command_buffer,
                 self.pipeline_layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
@@ -126,9 +230,9 @@ impl ComputePipeline {
             );
 
             self.device.device.cmd_dispatch(
-                frame.command_buffer,
-                frame.storage_image_extent.width.div_ceil(16),
-                frame.storage_image_extent.height.div_ceil(16),
+                command_buffer,
+                self.storage_image_extent.width.div_ceil(16),
+                self.storage_image_extent.height.div_ceil(16),
                 1,
             );
         }
@@ -136,13 +240,13 @@ impl ComputePipeline {
 
     pub fn blit(
         &self,
-        frame: &Frame,
+        command_buffer: vk::CommandBuffer,
         present_image: vk::Image,
         present_image_extent: vk::Extent2D,
     ) {
         self.device.transition_image(
-            frame.command_buffer,
-            frame.storage_image,
+            command_buffer,
+            self.storage_image,
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::GENERAL,
         );
@@ -154,8 +258,8 @@ impl ComputePipeline {
             layer_count: 1,
         };
 
-        let x = frame.storage_image_extent.width as i32;
-        let y = frame.storage_image_extent.height as i32;
+        let x = self.storage_image_extent.width as i32;
+        let y = self.storage_image_extent.height as i32;
 
         let src_offsets = [
             vk::Offset3D { x: 0, y: 0, z: 0 },
@@ -178,8 +282,8 @@ impl ComputePipeline {
 
         unsafe {
             self.device.device.cmd_blit_image(
-                frame.command_buffer,
-                frame.storage_image,
+                command_buffer,
+                self.storage_image,
                 vk::ImageLayout::GENERAL,
                 present_image,
                 vk::ImageLayout::GENERAL,
@@ -187,6 +291,14 @@ impl ComputePipeline {
                 vk::Filter::LINEAR,
             );
         }
+    }
+}
+
+impl Drop for ComputePipeline {
+    fn drop(&mut self) {
+        self.device
+            .free(std::mem::take(&mut self.storage_image_allocation))
+            .unwrap();
     }
 }
 

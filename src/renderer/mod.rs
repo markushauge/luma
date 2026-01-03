@@ -1,12 +1,11 @@
 mod compute_pipeline;
 mod device;
-mod frame;
 mod schedule;
 mod swapchain;
 
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use ash::vk;
 use bevy::{
     prelude::*,
@@ -21,7 +20,6 @@ use crate::{
 use self::{
     compute_pipeline::ComputePipeline,
     device::Device,
-    frame::Frame,
     schedule::{
         Render, RenderStartup, RenderSystems, run_render_schedule, run_render_startup_schedule,
     },
@@ -135,15 +133,16 @@ fn end(mut renderer: ResMut<Renderer>) -> Result<(), BevyError> {
     renderer.end().map_err(Into::into)
 }
 
-const MAX_FRAMES_IN_FLIGHT: u32 = 2;
-
 #[derive(Resource)]
+#[allow(dead_code)]
 pub struct Renderer {
     device: Device,
     swapchain: Swapchain,
     compute_pipeline: ComputePipeline,
-    frames: Vec<Frame>,
-    frame_index: usize,
+    command_pool: vk::CommandPool,
+    command_buffer: vk::CommandBuffer,
+    semaphore: vk::Semaphore,
+    fence: vk::Fence,
 }
 
 impl Renderer {
@@ -156,42 +155,69 @@ impl Renderer {
     ) -> Result<Self> {
         let device = Device::new(raw_handles)?;
         let swapchain = Swapchain::new(device.clone(), raw_handles, width, height)?;
-        let compute_pipeline = ComputePipeline::new(device.clone(), shader)?;
 
         let frame_width = (width as f32 * settings.resolution_scaling) as u32;
         let frame_height = (height as f32 * settings.resolution_scaling) as u32;
 
-        let frames = (0..MAX_FRAMES_IN_FLIGHT)
-            .map(|_| {
-                Frame::new(
-                    &device,
-                    frame_width,
-                    frame_height,
-                    &compute_pipeline.descriptor_set_layout_bindings,
-                    compute_pipeline.descriptor_set_layout,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let compute_pipeline =
+            ComputePipeline::new(device.clone(), shader, frame_width, frame_height)?;
 
-        let frame_index = 0;
+        let command_pool = unsafe {
+            let command_pool_create_info = vk::CommandPoolCreateInfo::default()
+                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
+                .queue_family_index(device.queue_family_index);
+
+            device
+                .device
+                .create_command_pool(&command_pool_create_info, None)?
+        };
+
+        let [command_buffer] = unsafe {
+            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
+                .command_buffer_count(1)
+                .command_pool(command_pool)
+                .level(vk::CommandBufferLevel::PRIMARY);
+
+            device
+                .device
+                .allocate_command_buffers(&command_buffer_allocate_info)?
+                .try_into()
+                .map_err(|_| anyhow!("Failed to allocate exactly one command buffer"))?
+        };
+
+        let semaphore = unsafe {
+            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
+
+            device
+                .device
+                .create_semaphore(&semaphore_create_info, None)?
+        };
+
+        let fence = unsafe {
+            let fence_create_info =
+                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
+
+            device.device.create_fence(&fence_create_info, None)?
+        };
 
         Ok(Self {
             device,
             swapchain,
             compute_pipeline,
-            frames,
-            frame_index,
+            command_pool,
+            command_buffer,
+            semaphore,
+            fence,
         })
     }
 
     pub fn begin(&mut self) -> Result<()> {
-        let frame = &self.frames[self.frame_index];
-        self.device.begin_frame(frame.command_buffer, frame.fence)?;
-        self.swapchain.acquire_next(frame.semaphore)?;
+        self.device.begin_frame(self.command_buffer, self.fence)?;
+        self.swapchain.acquire_next(self.semaphore)?;
         let present_image = self.swapchain.present_image();
 
         self.device.transition_image(
-            frame.command_buffer,
+            self.command_buffer,
             present_image.image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::GENERAL,
@@ -201,38 +227,38 @@ impl Renderer {
     }
 
     pub fn end(&mut self) -> Result<()> {
-        let frame = &self.frames[self.frame_index];
         let present_image = self.swapchain.present_image();
 
         self.device.transition_image(
-            frame.command_buffer,
+            self.command_buffer,
             present_image.image,
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::PRESENT_SRC_KHR,
         );
 
         self.device.end_frame(
-            frame.command_buffer,
-            frame.semaphore,
+            self.command_buffer,
+            self.semaphore,
             present_image.semaphore,
-            frame.fence,
+            self.fence,
         )?;
 
         self.swapchain.present()?;
-        self.frame_index = (self.frame_index + 1) % self.frames.len();
         Ok(())
     }
 
     pub fn render(&mut self, elapsed: Duration, camera_transform: &Transform) -> Result<()> {
-        let frame = &self.frames[self.frame_index];
         let present_image = self.swapchain.present_image();
         let time_millis = elapsed.as_millis() as u32;
 
         self.compute_pipeline
-            .dispatch(frame, camera_transform, time_millis);
+            .dispatch(self.command_buffer, camera_transform, time_millis);
 
-        self.compute_pipeline
-            .blit(frame, present_image.image, self.swapchain.surface_extent);
+        self.compute_pipeline.blit(
+            self.command_buffer,
+            present_image.image,
+            self.swapchain.surface_extent,
+        );
 
         Ok(())
     }
@@ -242,10 +268,6 @@ impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
             self.device.device.device_wait_idle().unwrap();
-        }
-
-        for frame in self.frames.drain(..) {
-            frame.destroy(&self.device);
         }
     }
 }
