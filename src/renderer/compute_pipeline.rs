@@ -85,18 +85,19 @@ fn create_compute_pipeline(
 fn run_compute_pipeline(
     renderer: Res<Renderer>,
     compute_pipeline: Option<Res<ComputePipeline>>,
-    camera_transform: Query<&Transform, With<Camera>>,
+    camera: Query<(&Camera, &Transform), With<Camera>>,
     time: Res<Time>,
 ) -> Result<(), BevyError> {
     let Some(compute_pipeline) = compute_pipeline else {
         return Ok(());
     };
 
-    let camera_transform = camera_transform.single()?;
+    let (camera, camera_transform) = camera.single()?;
 
     compute_pipeline.dispatch(
         renderer.command_buffer,
         camera_transform,
+        camera.fov,
         time.elapsed().as_millis() as u32,
     );
 
@@ -286,6 +287,7 @@ impl ComputePipeline {
         &self,
         command_buffer: vk::CommandBuffer,
         camera_transform: &Transform,
+        camera_fov: f32,
         time_millis: u32,
     ) {
         self.device.transition_image(
@@ -300,7 +302,7 @@ impl ComputePipeline {
             viewport_height: self.storage_image_extent.height,
             camera_translation: camera_transform.translation,
             camera_rotation: Mat3::from_quat(camera_transform.rotation),
-            camera_fov: 52.0f32.to_radians(), // TODO: Make configurable
+            camera_fov: camera_fov.to_radians(),
             time_millis,
         };
 

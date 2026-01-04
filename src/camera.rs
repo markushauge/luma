@@ -25,7 +25,15 @@ impl Plugin for CameraPlugin {
 }
 
 #[derive(Component)]
-pub struct Camera;
+pub struct Camera {
+    pub fov: f32,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self { fov: 52.0 }
+    }
+}
 
 fn update_transform(
     window: Query<&Window, With<PrimaryWindow>>,

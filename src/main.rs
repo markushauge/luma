@@ -38,12 +38,16 @@ fn main() -> AppExit {
 
 fn setup(mut commands: Commands) {
     commands.spawn((
-        Camera,
+        Camera::default(),
         Transform::from_xyz(0.0, 0.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 }
 
-fn render_ui(ctx: Res<EguiContext>, diagnostics: Res<DiagnosticsStore>) {
+fn render_ui(
+    ctx: Res<EguiContext>,
+    diagnostics: Res<DiagnosticsStore>,
+    mut camera: Query<&mut Camera>,
+) {
     egui::Window::new("Stats").show(&ctx, |ui| {
         if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
             let fps = fps.smoothed().unwrap_or_default();
@@ -55,4 +59,11 @@ fn render_ui(ctx: Res<EguiContext>, diagnostics: Res<DiagnosticsStore>) {
             ui.label(format!("Frame Time: {:.2} ms", frame_time));
         }
     });
+
+    if let Ok(mut camera) = camera.single_mut() {
+        egui::Window::new("Camera").show(&ctx, |ui| {
+            ui.label("FOV:");
+            ui.add(egui::Slider::new(&mut camera.fov, 30.0..=90.0).step_by(0.1));
+        });
+    }
 }
