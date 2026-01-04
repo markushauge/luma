@@ -139,17 +139,11 @@ impl EguiRenderer {
             depth_attachment_format: None,
         };
 
-        let options = egui_ash_renderer::Options {
-            in_flight_frames: 1,
-            srgb_framebuffer: false,
-            ..default()
-        };
-
         let renderer = egui_ash_renderer::Renderer::with_gpu_allocator(
             device.allocator.clone(),
             device.device.clone(),
             dynamic_rendering,
-            options,
+            default(),
         )?;
 
         let textures_to_free = Vec::new();
