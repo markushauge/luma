@@ -48,22 +48,30 @@ fn render_ui(
     diagnostics: Res<DiagnosticsStore>,
     mut camera: Query<&mut Camera>,
 ) {
-    egui::Window::new("Stats").show(&ctx, |ui| {
-        if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
-            let fps = fps.smoothed().unwrap_or_default();
-            ui.label(format!("FPS: {:.0}", fps));
-        }
+    egui::Window::new("Stats")
+        .collapsible(false)
+        .resizable(false)
+        .movable(false)
+        .show(&ctx, |ui| {
+            if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
+                let fps = fps.smoothed().unwrap_or_default();
+                ui.label(format!("FPS: {:.0}", fps));
+            }
 
-        if let Some(frame_time) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) {
-            let frame_time = frame_time.smoothed().unwrap_or_default();
-            ui.label(format!("Frame Time: {:.2} ms", frame_time));
-        }
-    });
+            if let Some(frame_time) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) {
+                let frame_time = frame_time.smoothed().unwrap_or_default();
+                ui.label(format!("Frame Time: {:.2} ms", frame_time));
+            }
+        });
 
     if let Ok(mut camera) = camera.single_mut() {
-        egui::Window::new("Camera").show(&ctx, |ui| {
-            ui.label("FOV:");
-            ui.add(egui::Slider::new(&mut camera.fov, 30.0..=90.0).step_by(0.1));
-        });
+        egui::Window::new("Camera")
+            .collapsible(false)
+            .resizable(false)
+            .movable(false)
+            .show(&ctx, |ui| {
+                ui.label("FOV:");
+                ui.add(egui::Slider::new(&mut camera.fov, 30.0..=90.0).step_by(0.1));
+            });
     }
 }
