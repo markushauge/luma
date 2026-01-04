@@ -141,7 +141,7 @@ impl EguiRenderer {
 
         let options = egui_ash_renderer::Options {
             in_flight_frames: 1,
-            srgb_framebuffer: true,
+            srgb_framebuffer: false,
             ..default()
         };
 
