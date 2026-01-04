@@ -6,7 +6,6 @@ mod shader;
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     prelude::*,
-    window::PrimaryWindow,
 };
 
 use crate::{
@@ -33,7 +32,6 @@ fn main() -> AppExit {
         })
         .add_plugins(EguiPlugin)
         .add_systems(Startup, setup)
-        .add_systems(Update, update_window_title)
         .add_systems(EguiPass, render_ui.in_set(EguiPassSystems::Render))
         .run()
 }
@@ -45,44 +43,16 @@ fn setup(mut commands: Commands) {
     ));
 }
 
-fn render_ui(ctx: Res<EguiContext>) {
-    egui::Window::new("Hello").show(&ctx, |ui| {
-        ui.label("Hello World");
+fn render_ui(ctx: Res<EguiContext>, diagnostics: Res<DiagnosticsStore>) {
+    egui::Window::new("Stats").show(&ctx, |ui| {
+        if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
+            let fps = fps.smoothed().unwrap_or_default();
+            ui.label(format!("FPS: {:.0}", fps));
+        }
+
+        if let Some(frame_time) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) {
+            let frame_time = frame_time.smoothed().unwrap_or_default();
+            ui.label(format!("Frame Time: {:.2} ms", frame_time));
+        }
     });
-}
-
-fn update_window_title(
-    mut window: Query<&mut Window, With<PrimaryWindow>>,
-    mut timer: Local<Option<Timer>>,
-    diagnostics: Res<DiagnosticsStore>,
-    time: Res<Time>,
-) {
-    let Ok(mut window) = window.single_mut() else {
-        return;
-    };
-
-    match timer.as_mut() {
-        Some(timer) => {
-            if !timer.tick(time.delta()).is_finished() {
-                return;
-            }
-        }
-        None => {
-            *timer = Some(Timer::from_seconds(1.0, TimerMode::Repeating));
-        }
-    }
-
-    let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) else {
-        return;
-    };
-
-    let Some(frame_time) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FRAME_TIME) else {
-        return;
-    };
-
-    window.title = format!(
-        "Luma ({:.0} FPS, {:.2} ms)",
-        fps.smoothed().unwrap_or_default(),
-        frame_time.smoothed().unwrap_or_default()
-    );
 }
