@@ -21,7 +21,13 @@ fn main() -> AppExit {
     panic::init_hook();
 
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Luma".to_owned(),
+                ..default()
+            }),
+            ..default()
+        }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(RendererPlugin)
         .add_plugins(CameraPlugin)
