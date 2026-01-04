@@ -156,20 +156,23 @@ fn update_transform_gamepad(
 
 fn update_cursor_grab(
     mut cursor_options: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let Ok(mut cursor_options) = cursor_options.single_mut() else {
         return;
     };
 
-    if mouse.just_pressed(MouseButton::Left) {
-        cursor_options.grab_mode = CursorGrabMode::Confined;
-        cursor_options.visible = false;
-    }
-
     if keys.just_pressed(KeyCode::Escape) {
-        cursor_options.grab_mode = CursorGrabMode::None;
-        cursor_options.visible = true;
+        match cursor_options.grab_mode {
+            CursorGrabMode::Confined => {
+                cursor_options.grab_mode = CursorGrabMode::None;
+                cursor_options.visible = true;
+            }
+            CursorGrabMode::None => {
+                cursor_options.grab_mode = CursorGrabMode::Confined;
+                cursor_options.visible = false;
+            }
+            _ => {}
+        }
     }
 }
