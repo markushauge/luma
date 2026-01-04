@@ -18,18 +18,20 @@ pub struct Swapchain {
     pub swapchain: vk::SwapchainKHR,
     pub present_images: Vec<SwapchainImage>,
     pub present_image_index: u32,
+    pub out_of_date: bool,
 }
 
 impl Swapchain {
     pub fn new(
         device: Device,
-        raw_handles: &RawHandleWrapper,
+        handle: &RawHandleWrapper,
         width: u32,
         height: u32,
+        old_swapchain: Option<vk::SwapchainKHR>,
     ) -> Result<Self> {
         unsafe {
-            let display_handle = raw_handles.get_display_handle();
-            let window_handle = raw_handles.get_window_handle();
+            let display_handle = handle.get_display_handle();
+            let window_handle = handle.get_window_handle();
 
             let surface = ash_window::create_surface(
                 &device.entry,
@@ -51,8 +53,6 @@ impl Swapchain {
                         && format.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
                 })
                 .ok_or_else(|| anyhow!("No suitable surface format found"))?;
-
-            tracing::info!("Using surface format: {:?}", surface_format);
 
             let surface_capabilities = device
                 .surface_instance
@@ -91,7 +91,8 @@ impl Swapchain {
                 .pre_transform(surface_capabilities.current_transform)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
                 .present_mode(present_mode)
-                .clipped(true);
+                .clipped(true)
+                .old_swapchain(old_swapchain.unwrap_or(vk::SwapchainKHR::null()));
 
             let swapchain = device
                 .swapchain_device
@@ -133,6 +134,7 @@ impl Swapchain {
                 .collect::<Result<Vec<_>>>()?;
 
             let present_image_index = 0;
+            let out_of_date = false;
 
             Ok(Self {
                 device,
@@ -141,22 +143,31 @@ impl Swapchain {
                 swapchain,
                 present_images,
                 present_image_index,
+                out_of_date,
             })
         }
     }
 
     pub fn acquire_next(&mut self, signal_semaphore: vk::Semaphore) -> Result<()> {
         unsafe {
-            let (image_index, _) = self.device.swapchain_device.acquire_next_image(
+            let result = self.device.swapchain_device.acquire_next_image(
                 self.swapchain,
                 u64::MAX,
                 signal_semaphore,
                 vk::Fence::null(),
-            )?;
+            );
 
-            self.present_image_index = image_index;
-            Ok(())
+            self.out_of_date = match result {
+                Ok((image_index, suboptimal)) => {
+                    self.present_image_index = image_index;
+                    suboptimal
+                }
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
+                Err(err) => return Err(err.into()),
+            };
         }
+
+        Ok(())
     }
 
     pub fn present(&mut self) -> Result<()> {
@@ -168,15 +179,48 @@ impl Swapchain {
                 .swapchains(std::slice::from_ref(&self.swapchain))
                 .image_indices(std::slice::from_ref(&self.present_image_index));
 
-            self.device
+            let result = self
+                .device
                 .swapchain_device
-                .queue_present(self.device.queue, &present_info)?;
+                .queue_present(self.device.queue, &present_info);
 
-            Ok(())
+            self.out_of_date = match result {
+                Ok(suboptimal) => suboptimal,
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
+                Err(err) => return Err(err.into()),
+            };
         }
+
+        Ok(())
     }
 
     pub fn present_image(&self) -> &SwapchainImage {
         &self.present_images[self.present_image_index as usize]
+    }
+}
+
+impl Drop for Swapchain {
+    fn drop(&mut self) {
+        self.device.wait_idle().unwrap();
+
+        unsafe {
+            for present_image in self.present_images.drain(..) {
+                self.device
+                    .device
+                    .destroy_semaphore(present_image.semaphore, None);
+
+                self.device
+                    .device
+                    .destroy_image_view(present_image.image_view, None);
+            }
+
+            self.device
+                .swapchain_device
+                .destroy_swapchain(self.swapchain, None);
+
+            self.device
+                .surface_instance
+                .destroy_surface(self.surface, None);
+        }
     }
 }
