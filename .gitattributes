@@ -1,1 +1,10 @@
-*.comp linguist-language=GLSL
+# Vulkan GLSL — Ray Tracing pipeline shaders
+*.rgen  linguist-language=GLSL
+*.rmiss linguist-language=GLSL
+*.rchit linguist-language=GLSL
+*.rahit linguist-language=GLSL
+*.rint  linguist-language=GLSL
+*.rcall linguist-language=GLSL
+
+# Vulkan GLSL — Compute shader
+*.comp  linguist-language=GLSL
