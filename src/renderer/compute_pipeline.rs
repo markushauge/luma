@@ -97,7 +97,7 @@ fn run_compute_pipeline(
     compute_pipeline.dispatch(
         renderer.command_buffer,
         camera_transform,
-        camera.fov,
+        camera.vertical_fov(),
         time.elapsed().as_millis() as u32,
     );
 
@@ -302,7 +302,7 @@ impl ComputePipeline {
             viewport_height: self.storage_image_extent.height,
             camera_translation: camera_transform.translation,
             camera_rotation: Mat3::from_quat(camera_transform.rotation),
-            camera_fov: camera_fov.to_radians(),
+            camera_fov,
             time_millis,
         };
 

@@ -76,8 +76,12 @@ fn render_ui(
             .resizable(false)
             .movable(false)
             .show(&ctx, |ui| {
-                ui.label("FOV:");
-                ui.add(egui::Slider::new(&mut camera.fov, 30.0..=90.0).step_by(0.1));
+                ui.label("Focal length:");
+                ui.add(
+                    egui::Slider::new(&mut camera.focal_length, 10.0..=70.0)
+                        .step_by(1.0)
+                        .custom_formatter(|value, _| format!("{:.0} mm", value)),
+                );
             });
     }
 }

@@ -24,14 +24,46 @@ impl Plugin for CameraPlugin {
     }
 }
 
+pub struct Sensor {
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Sensor {
+    /// 35mm full-frame sensor
+    pub const FULL_FRAME: Self = Self {
+        width: 36.0,
+        height: 24.0,
+    };
+
+    #[allow(dead_code)]
+    pub fn horizontal_fov(&self, focal_length: f32) -> f32 {
+        2.0 * (self.width / (2.0 * focal_length)).atan()
+    }
+
+    pub fn vertical_fov(&self, focal_length: f32) -> f32 {
+        2.0 * (self.height / (2.0 * focal_length)).atan()
+    }
+}
+
 #[derive(Component)]
 pub struct Camera {
-    pub fov: f32,
+    pub sensor: Sensor,
+    pub focal_length: f32,
+}
+
+impl Camera {
+    pub fn vertical_fov(&self) -> f32 {
+        self.sensor.vertical_fov(self.focal_length)
+    }
 }
 
 impl Default for Camera {
     fn default() -> Self {
-        Self { fov: 52.0 }
+        Self {
+            sensor: Sensor::FULL_FRAME,
+            focal_length: 24.0,
+        }
     }
 }
 
