@@ -27,19 +27,29 @@ impl Swapchain {
         handle: &RawHandleWrapper,
         width: u32,
         height: u32,
-        old_swapchain: Option<vk::SwapchainKHR>,
+        old_swapchain: Option<&mut Self>,
     ) -> Result<Self> {
         unsafe {
-            let display_handle = handle.get_display_handle();
-            let window_handle = handle.get_window_handle();
+            let (old_swapchain, surface) = match old_swapchain {
+                Some(old_swapchain) => (
+                    std::mem::take(&mut old_swapchain.swapchain),
+                    std::mem::take(&mut old_swapchain.surface),
+                ),
+                None => {
+                    let display_handle = handle.get_display_handle();
+                    let window_handle = handle.get_window_handle();
 
-            let surface = ash_window::create_surface(
-                &device.entry,
-                &device.instance,
-                display_handle,
-                window_handle,
-                None,
-            )?;
+                    let surface = ash_window::create_surface(
+                        &device.entry,
+                        &device.instance,
+                        display_handle,
+                        window_handle,
+                        None,
+                    )?;
+
+                    (vk::SwapchainKHR::null(), surface)
+                }
+            };
 
             let surface_formats = device
                 .surface_instance
@@ -92,7 +102,7 @@ impl Swapchain {
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
                 .present_mode(present_mode)
                 .clipped(true)
-                .old_swapchain(old_swapchain.unwrap_or(vk::SwapchainKHR::null()));
+                .old_swapchain(old_swapchain);
 
             let swapchain = device
                 .swapchain_device

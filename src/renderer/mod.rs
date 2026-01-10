@@ -195,7 +195,7 @@ impl Renderer {
             &self.handle,
             width,
             height,
-            Some(self.swapchain.swapchain),
+            Some(&mut self.swapchain),
         )?;
 
         Ok(())
