@@ -26,12 +26,12 @@ pub struct DeviceInner {
 }
 
 impl Device {
-    pub fn new(raw_handles: &RawHandleWrapper) -> Result<Self> {
+    pub fn new(handle: &RawHandleWrapper) -> Result<Self> {
         unsafe {
             let entry = ash::Entry::load()?;
             let application_info = vk::ApplicationInfo::default().api_version(Self::api_version());
             let instance_layers = Self::instance_layers();
-            let display_handle = raw_handles.get_display_handle();
+            let display_handle = handle.get_display_handle();
             let window_extensions = ash_window::enumerate_required_extensions(display_handle)?;
 
             let instance_create_info = vk::InstanceCreateInfo::default()
@@ -200,6 +200,10 @@ impl Device {
         let mut allocator = self.allocator.lock().unwrap();
         allocator.free(allocation)?;
         Ok(())
+    }
+
+    pub fn wait_idle(&self) -> Result<()> {
+        unsafe { self.device.device_wait_idle().map_err(Into::into) }
     }
 
     fn api_version() -> u32 {

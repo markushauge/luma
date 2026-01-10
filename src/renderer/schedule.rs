@@ -5,11 +5,9 @@ use bevy::ecs::{
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum RenderSystems {
-    Begin,
     PreRender,
     Render,
     PostRender,
-    End,
 }
 
 #[derive(ScheduleLabel, Debug, Hash, PartialEq, Eq, Clone)]
@@ -30,11 +28,9 @@ impl Render {
 
         schedule.configure_sets(
             (
-                RenderSystems::Begin,
                 RenderSystems::PreRender,
                 RenderSystems::Render,
                 RenderSystems::PostRender,
-                RenderSystems::End,
             )
                 .chain(),
         );
@@ -45,8 +41,4 @@ impl Render {
 
 pub fn run_render_startup_schedule(world: &mut World) {
     world.run_schedule(RenderStartup);
-}
-
-pub fn run_render_schedule(world: &mut World) {
-    world.run_schedule(Render);
 }

@@ -15,9 +15,7 @@ use crate::shader::ShaderPlugin;
 
 use self::{
     device::Device,
-    schedule::{
-        Render, RenderStartup, RenderSystems, run_render_schedule, run_render_startup_schedule,
-    },
+    schedule::{Render, RenderStartup, run_render_startup_schedule},
     swapchain::Swapchain,
 };
 
@@ -32,14 +30,7 @@ impl Plugin for RendererPlugin {
                 Startup,
                 (setup_renderer, run_render_startup_schedule).chain(),
             )
-            .add_systems(Update, run_render_schedule)
-            .add_systems(
-                Render,
-                (
-                    begin.in_set(RenderSystems::Begin),
-                    end.in_set(RenderSystems::End),
-                ),
-            );
+            .add_systems(Update, (recreate_swapchain, render).chain());
     }
 }
 
@@ -47,23 +38,52 @@ fn setup_renderer(
     mut commands: Commands,
     windows: Query<(&Window, &RawHandleWrapper), With<PrimaryWindow>>,
 ) -> Result<(), BevyError> {
-    let (window, raw_handles) = windows.single()?;
-    let UVec2 { x, y } = window.physical_size();
-    let renderer = Renderer::new(raw_handles, x, y)?;
+    let (window, handle) = windows.single()?;
+    let width = window.physical_width();
+    let height = window.physical_height();
+    let renderer = Renderer::new(handle.clone(), width, height)?;
     commands.insert_resource(renderer);
     Ok(())
 }
 
-fn begin(mut renderer: ResMut<Renderer>) -> Result<(), BevyError> {
-    renderer.begin().map_err(Into::into)
+fn recreate_swapchain(
+    mut renderer: ResMut<Renderer>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) -> Result<(), BevyError> {
+    if !renderer.swapchain.out_of_date {
+        return Ok(());
+    }
+
+    let window = windows.single()?;
+    let width = window.physical_width();
+    let height = window.physical_height();
+    renderer.recreate_swapchain(width, height)?;
+    Ok(())
 }
 
-fn end(mut renderer: ResMut<Renderer>) -> Result<(), BevyError> {
-    renderer.end().map_err(Into::into)
+fn render(world: &mut World) -> Result<(), BevyError> {
+    let mut renderer = world.resource_mut::<Renderer>();
+
+    if !renderer.swapchain.out_of_date {
+        renderer.begin()?;
+    }
+
+    if !renderer.swapchain.out_of_date {
+        world.run_schedule(Render);
+    }
+
+    let mut renderer = world.resource_mut::<Renderer>();
+
+    if !renderer.swapchain.out_of_date {
+        renderer.end()?;
+    }
+
+    Ok(())
 }
 
 #[derive(Resource)]
 pub struct Renderer {
+    handle: RawHandleWrapper,
     device: Device,
     swapchain: Swapchain,
     command_pool: vk::CommandPool,
@@ -73,9 +93,9 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(raw_handles: &RawHandleWrapper, width: u32, height: u32) -> Result<Self> {
-        let device = Device::new(raw_handles)?;
-        let swapchain = Swapchain::new(device.clone(), raw_handles, width, height)?;
+    pub fn new(handle: RawHandleWrapper, width: u32, height: u32) -> Result<Self> {
+        let device = Device::new(&handle)?;
+        let swapchain = Swapchain::new(device.clone(), &handle, width, height, None)?;
 
         let command_pool = unsafe {
             let command_pool_create_info = vk::CommandPoolCreateInfo::default()
@@ -116,6 +136,7 @@ impl Renderer {
         };
 
         Ok(Self {
+            handle,
             device,
             swapchain,
             command_pool,
@@ -128,6 +149,11 @@ impl Renderer {
     pub fn begin(&mut self) -> Result<()> {
         self.device.begin_frame(self.command_buffer, self.fence)?;
         self.swapchain.acquire_next(self.semaphore)?;
+
+        if self.swapchain.out_of_date {
+            return Ok(());
+        }
+
         let present_image = self.swapchain.present_image();
 
         self.device.transition_image(
@@ -160,12 +186,24 @@ impl Renderer {
         self.swapchain.present()?;
         Ok(())
     }
+
+    pub fn recreate_swapchain(&mut self, width: u32, height: u32) -> Result<()> {
+        self.device.wait_idle()?;
+
+        self.swapchain = Swapchain::new(
+            self.device.clone(),
+            &self.handle,
+            width,
+            height,
+            Some(&mut self.swapchain),
+        )?;
+
+        Ok(())
+    }
 }
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        unsafe {
-            self.device.device.device_wait_idle().unwrap();
-        }
+        self.device.wait_idle().unwrap();
     }
 }
