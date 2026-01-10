@@ -31,17 +31,13 @@ impl Device {
             let entry = ash::Entry::load()?;
             let application_info = vk::ApplicationInfo::default().api_version(Self::api_version());
             let instance_layers = Self::instance_layers();
-            let mut instance_extensions = Self::instance_extensions();
             let display_handle = raw_handles.get_display_handle();
             let window_extensions = ash_window::enumerate_required_extensions(display_handle)?;
-            instance_extensions.extend(window_extensions);
-            let instance_create_flags = Self::instance_create_flags();
 
             let instance_create_info = vk::InstanceCreateInfo::default()
                 .application_info(&application_info)
                 .enabled_layer_names(&instance_layers)
-                .enabled_extension_names(&instance_extensions)
-                .flags(instance_create_flags);
+                .enabled_extension_names(window_extensions);
 
             let instance = entry.create_instance(&instance_create_info, None)?;
             let surface_instance = khr::surface::Instance::new(&entry, &instance);
@@ -221,39 +217,10 @@ impl Device {
         instance_layers
     }
 
-    fn instance_extensions() -> Vec<*const c_char> {
-        let mut instance_extensions = vec![];
-
-        // Enable portability enumeration on macOS
-        if cfg!(target_os = "macos") {
-            instance_extensions.push(khr::portability_enumeration::NAME.as_ptr());
-        }
-
-        instance_extensions
-    }
-
-    fn instance_create_flags() -> vk::InstanceCreateFlags {
-        let mut instance_create_flags = vk::InstanceCreateFlags::empty();
-
-        // Enable portability enumeration on macOS
-        if cfg!(target_os = "macos") {
-            instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
-        }
-
-        instance_create_flags
-    }
-
     fn device_extensions() -> Vec<*const c_char> {
-        let mut device_extensions = vec![
+        vec![
             khr::swapchain::NAME.as_ptr(),
             khr::dynamic_rendering::NAME.as_ptr(),
-        ];
-
-        // Enable portability subset on macOS
-        if cfg!(target_os = "macos") {
-            device_extensions.push(khr::portability_subset::NAME.as_ptr());
-        }
-
-        device_extensions
+        ]
     }
 }
