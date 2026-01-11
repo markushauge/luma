@@ -63,6 +63,12 @@ impl AssetLoader for ShaderLoader {
 
             let kind = match extension {
                 Some("comp") => shaderc::ShaderKind::Compute,
+                Some("rgen") => shaderc::ShaderKind::RayGeneration,
+                Some("rmiss") => shaderc::ShaderKind::Miss,
+                Some("rchit") => shaderc::ShaderKind::ClosestHit,
+                Some("rahit") => shaderc::ShaderKind::AnyHit,
+                Some("rint") => shaderc::ShaderKind::Intersection,
+                Some("rcall") => shaderc::ShaderKind::Callable,
                 _ => {
                     return Err(anyhow!(
                         "Could not infer shader kind from extension: {:?}",
