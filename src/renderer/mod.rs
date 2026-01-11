@@ -1,6 +1,6 @@
-pub mod compute_pipeline;
 mod device;
 pub mod egui_renderer;
+pub mod ray_tracing;
 mod schedule;
 mod swapchain;
 

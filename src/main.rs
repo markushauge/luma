@@ -12,8 +12,8 @@ use crate::{
     camera::{Camera, CameraPlugin},
     renderer::{
         RendererPlugin,
-        compute_pipeline::{ComputePipelinePlugin, ComputePipelineSettings},
         egui_renderer::{EguiContext, EguiPass, EguiPassSystems, EguiPlugin},
+        ray_tracing::RayTracingPlugin,
     },
 };
 
@@ -31,11 +31,7 @@ fn main() -> AppExit {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(RendererPlugin)
         .add_plugins(CameraPlugin)
-        .add_plugins(ComputePipelinePlugin {
-            settings: ComputePipelineSettings {
-                resolution_scaling: 0.25,
-            },
-        })
+        .add_plugins(RayTracingPlugin::default())
         .add_plugins(EguiPlugin)
         .add_systems(Startup, setup)
         .add_systems(EguiPass, render_ui.in_set(EguiPassSystems::Render))

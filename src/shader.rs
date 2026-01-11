@@ -81,6 +81,11 @@ impl AssetLoader for ShaderLoader {
             reader.read_to_string(&mut source).await?;
 
             let mut options = shaderc::CompileOptions::new()?;
+            options.set_target_env(
+                shaderc::TargetEnv::Vulkan,
+                shaderc::EnvVersion::Vulkan1_3 as u32,
+            );
+            options.set_target_spirv(shaderc::SpirvVersion::V1_6);
             options.set_include_callback(include_callback);
 
             let entry_point = settings.entry_point.as_deref().unwrap_or("main");
