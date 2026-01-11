@@ -10,7 +10,6 @@ pub struct SwapchainImage {
     pub semaphore: vk::Semaphore,
 }
 
-#[allow(dead_code)]
 pub struct Swapchain {
     pub device: Device,
     pub surface: vk::SurfaceKHR,

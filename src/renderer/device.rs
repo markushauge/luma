@@ -11,7 +11,7 @@ use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, Allocat
 #[derive(Clone, Deref)]
 pub struct Device(Arc<DeviceInner>);
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub struct DeviceInner {
     pub entry: ash::Entry,
     pub instance: ash::Instance,

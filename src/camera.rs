@@ -36,7 +36,7 @@ impl Sensor {
         height: 24.0,
     };
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub fn horizontal_fov(&self, focal_length: f32) -> f32 {
         2.0 * (self.width / (2.0 * focal_length)).atan()
     }
