@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-use std::mem::size_of;
-
 use anyhow::{Result, anyhow};
 use ash::vk::{self, Extent2D};
 use bevy::prelude::*;
@@ -14,13 +12,14 @@ use gpu_allocator::{
 use crate::{
     camera::Camera,
     renderer::{
-        Renderer,
-        schedule::{Render, RenderSystems},
+        Device, Renderer,
+        acceleration_structure::Vertex,
+        schedule::{Render, RenderStartup, RenderSystems},
     },
     shader::Shader,
 };
 
-use super::Device;
+use super::acceleration_structure::{BlasInstance, Tlas};
 
 #[derive(Default)]
 pub struct RayTracingPlugin {
@@ -31,6 +30,7 @@ impl Plugin for RayTracingPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.settings.clone())
             .add_systems(Startup, load_shaders)
+            .add_systems(RenderStartup, build_acceleration_structures)
             .add_systems(
                 Render,
                 (
@@ -69,6 +69,63 @@ fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
         miss: asset_server.load("shaders/miss.rmiss"),
         closest_hit: asset_server.load("shaders/closest_hit.rchit"),
     });
+}
+
+fn build_acceleration_structures(
+    mut commands: Commands,
+    renderer: Res<Renderer>,
+) -> Result<(), BevyError> {
+    let vertices = [
+        Vertex {
+            pos: [-0.5, -0.5, -0.5],
+        },
+        Vertex {
+            pos: [0.5, -0.5, -0.5],
+        },
+        Vertex {
+            pos: [0.5, 0.5, -0.5],
+        },
+        Vertex {
+            pos: [-0.5, 0.5, -0.5],
+        },
+        Vertex {
+            pos: [-0.5, -0.5, 0.5],
+        },
+        Vertex {
+            pos: [0.5, -0.5, 0.5],
+        },
+        Vertex {
+            pos: [0.5, 0.5, 0.5],
+        },
+        Vertex {
+            pos: [-0.5, 0.5, 0.5],
+        },
+    ];
+
+    let indices = [
+        0, 1, 2, 2, 3, 0, // Front
+        1, 5, 6, 6, 2, 1, // Right
+        5, 4, 7, 7, 6, 5, // Back
+        4, 0, 3, 3, 7, 4, // Left
+        3, 2, 6, 6, 7, 3, // Top
+        4, 5, 1, 1, 0, 4, // Bottom
+    ];
+
+    let blas = renderer.device.create_blas(&vertices, &indices)?;
+
+    // 3 cube instances along X with 1 unit gap between surfaces.
+    // Cube is unit-sized ([-0.5, 0.5]), so center-to-center spacing is 2.0.
+    let instances = [-2.0_f32, 0.0, 2.0].map(|x| BlasInstance {
+        blas: &blas,
+        transform: Transform::from_xyz(x, 0.0, 0.0),
+    });
+
+    let tlas = renderer.device.create_tlas(&instances)?;
+
+    commands.insert_resource(blas);
+    commands.insert_resource(tlas);
+
+    Ok(())
 }
 
 fn create_or_update_ray_tracing_pipeline(
@@ -120,6 +177,7 @@ fn create_or_update_ray_tracing_pipeline(
 fn execute_ray_tracing_pipeline(
     renderer: Res<Renderer>,
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
+    tlas: Option<Res<Tlas>>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
     time: Res<Time>,
 ) -> Result<(), BevyError> {
@@ -127,10 +185,15 @@ fn execute_ray_tracing_pipeline(
         return Ok(());
     };
 
+    let Some(tlas) = tlas else {
+        return Ok(());
+    };
+
     let (camera, camera_transform) = camera.single()?;
 
     ray_tracing_pipeline.trace_rays(
         renderer.command_buffer,
+        &tlas,
         camera_transform,
         camera.vertical_fov(),
         time.elapsed().as_millis() as u32,
@@ -155,18 +218,6 @@ pub struct RayTracingPipeline {
     pub storage_image_view: vk::ImageView,
     pub storage_image_allocation: Allocation,
     pub storage_image_extent: vk::Extent3D,
-    pub vertex_buffer: vk::Buffer,
-    pub vertex_allocation: Allocation,
-    pub index_buffer: vk::Buffer,
-    pub index_allocation: Allocation,
-    pub blas: vk::AccelerationStructureKHR,
-    pub blas_buffer: vk::Buffer,
-    pub blas_allocation: Allocation,
-    pub tlas: vk::AccelerationStructureKHR,
-    pub tlas_buffer: vk::Buffer,
-    pub tlas_allocation: Allocation,
-    pub instance_buffer: vk::Buffer,
-    pub instance_allocation: Allocation,
     pub descriptor_set: vk::DescriptorSet,
 }
 
@@ -178,10 +229,27 @@ impl RayTracingPipeline {
     pub fn trace_rays(
         &self,
         command_buffer: vk::CommandBuffer,
+        tlas: &Tlas,
         camera_transform: &Transform,
         camera_fov: f32,
         time_millis: u32,
     ) {
+        unsafe {
+            let mut acceleration_structure_info =
+                vk::WriteDescriptorSetAccelerationStructureKHR::default()
+                    .acceleration_structures(std::slice::from_ref(&tlas.acceleration_structure));
+
+            self.device.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
+                    .descriptor_count(1)
+                    .push_next(&mut acceleration_structure_info)],
+                &[],
+            );
+        }
+
         self.device.transition_image(
             command_buffer,
             self.storage_image,
@@ -394,34 +462,6 @@ impl Drop for RayTracingPipeline {
             self.device.device.destroy_image(self.storage_image, None);
             self.device
                 .free(std::mem::take(&mut self.storage_image_allocation))
-                .unwrap();
-            self.device
-                .device
-                .destroy_buffer(self.instance_buffer, None);
-            self.device
-                .free(std::mem::take(&mut self.instance_allocation))
-                .unwrap();
-            self.device
-                .acceleration_structure_device
-                .destroy_acceleration_structure(self.tlas, None);
-            self.device.device.destroy_buffer(self.tlas_buffer, None);
-            self.device
-                .free(std::mem::take(&mut self.tlas_allocation))
-                .unwrap();
-            self.device
-                .acceleration_structure_device
-                .destroy_acceleration_structure(self.blas, None);
-            self.device.device.destroy_buffer(self.blas_buffer, None);
-            self.device
-                .free(std::mem::take(&mut self.blas_allocation))
-                .unwrap();
-            self.device.device.destroy_buffer(self.index_buffer, None);
-            self.device
-                .free(std::mem::take(&mut self.index_allocation))
-                .unwrap();
-            self.device.device.destroy_buffer(self.vertex_buffer, None);
-            self.device
-                .free(std::mem::take(&mut self.vertex_allocation))
                 .unwrap();
             self.shader_binding_table.destroy(&self.device);
             self.device.device.destroy_pipeline(self.pipeline, None);
@@ -669,602 +709,6 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .device
                 .device
                 .create_image_view(&storage_image_view_info, None)?;
-
-            // Create cube mesh
-            // Cube vertices: position (x, y, z)
-            #[repr(C)]
-            #[derive(Clone, Copy, Pod, Zeroable)]
-            struct Vertex {
-                pos: [f32; 3],
-            }
-
-            let vertices = [
-                // Front face
-                Vertex {
-                    pos: [-0.5, -0.5, -0.5],
-                },
-                Vertex {
-                    pos: [0.5, -0.5, -0.5],
-                },
-                Vertex {
-                    pos: [0.5, 0.5, -0.5],
-                },
-                Vertex {
-                    pos: [-0.5, 0.5, -0.5],
-                },
-                // Back face
-                Vertex {
-                    pos: [-0.5, -0.5, 0.5],
-                },
-                Vertex {
-                    pos: [0.5, -0.5, 0.5],
-                },
-                Vertex {
-                    pos: [0.5, 0.5, 0.5],
-                },
-                Vertex {
-                    pos: [-0.5, 0.5, 0.5],
-                },
-            ];
-
-            let indices: [u32; 36] = [
-                // Front
-                0, 1, 2, 2, 3, 0, // Right
-                1, 5, 6, 6, 2, 1, // Back
-                5, 4, 7, 7, 6, 5, // Left
-                4, 0, 3, 3, 7, 4, // Top
-                3, 2, 6, 6, 7, 3, // Bottom
-                4, 5, 1, 1, 0, 4,
-            ];
-
-            // Create vertex buffer
-            let vertex_buffer_size = (vertices.len() * size_of::<Vertex>()) as u64;
-            let vertex_buffer_create_info = vk::BufferCreateInfo::default()
-                .size(vertex_buffer_size)
-                .usage(
-                    vk::BufferUsageFlags::VERTEX_BUFFER
-                        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                )
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let vertex_buffer = self
-                .device
-                .device
-                .create_buffer(&vertex_buffer_create_info, None)?;
-
-            let vertex_requirements = self
-                .device
-                .device
-                .get_buffer_memory_requirements(vertex_buffer);
-
-            let mut vertex_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing Vertex Buffer",
-                requirements: vertex_requirements,
-                location: MemoryLocation::CpuToGpu,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(vertex_buffer),
-            })?;
-
-            self.device.device.bind_buffer_memory(
-                vertex_buffer,
-                vertex_allocation.memory(),
-                vertex_allocation.offset(),
-            )?;
-
-            // Copy vertex data
-            let vertex_slice = vertex_allocation
-                .mapped_slice_mut()
-                .ok_or_else(|| anyhow!("Vertex buffer is not mapped"))?;
-            vertex_slice[..vertex_buffer_size as usize]
-                .copy_from_slice(bytemuck::cast_slice(&vertices));
-
-            // Create index buffer
-            let index_buffer_size = (indices.len() * size_of::<u32>()) as u64;
-            let index_buffer_create_info = vk::BufferCreateInfo::default()
-                .size(index_buffer_size)
-                .usage(
-                    vk::BufferUsageFlags::INDEX_BUFFER
-                        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                )
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let index_buffer = self
-                .device
-                .device
-                .create_buffer(&index_buffer_create_info, None)?;
-            let index_requirements = self
-                .device
-                .device
-                .get_buffer_memory_requirements(index_buffer);
-
-            let mut index_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing Index Buffer",
-                requirements: index_requirements,
-                location: MemoryLocation::CpuToGpu,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(index_buffer),
-            })?;
-
-            self.device.device.bind_buffer_memory(
-                index_buffer,
-                index_allocation.memory(),
-                index_allocation.offset(),
-            )?;
-
-            // Copy index data
-            let index_slice = index_allocation
-                .mapped_slice_mut()
-                .ok_or_else(|| anyhow!("Index buffer is not mapped"))?;
-            index_slice[..index_buffer_size as usize]
-                .copy_from_slice(bytemuck::cast_slice(&indices));
-
-            // Get buffer device addresses
-            let vertex_buffer_address = self.device.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(vertex_buffer),
-            );
-
-            let index_buffer_address = self.device.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(index_buffer),
-            );
-
-            // Build BLAS
-            let blas_geometry = vk::AccelerationStructureGeometryKHR::default()
-                .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
-                .flags(vk::GeometryFlagsKHR::OPAQUE)
-                .geometry(vk::AccelerationStructureGeometryDataKHR {
-                    triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
-                        .vertex_format(vk::Format::R32G32B32_SFLOAT)
-                        .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: vertex_buffer_address,
-                        })
-                        .vertex_stride(size_of::<Vertex>() as u64)
-                        .max_vertex(vertices.len() as u32 - 1)
-                        .index_type(vk::IndexType::UINT32)
-                        .index_data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: index_buffer_address,
-                        }),
-                });
-
-            let blas_build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
-                .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                .geometries(std::slice::from_ref(&blas_geometry));
-
-            let primitive_count = (indices.len() / 3) as u32;
-            let mut blas_size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
-            self.device
-                .acceleration_structure_device
-                .get_acceleration_structure_build_sizes(
-                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                    &blas_build_info,
-                    &[primitive_count],
-                    &mut blas_size_info,
-                );
-
-            // Create BLAS buffer
-            let blas_buffer_create_info = vk::BufferCreateInfo::default()
-                .size(blas_size_info.acceleration_structure_size)
-                .usage(
-                    vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
-                        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                )
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let blas_buffer = self
-                .device
-                .device
-                .create_buffer(&blas_buffer_create_info, None)?;
-            let blas_requirements = self
-                .device
-                .device
-                .get_buffer_memory_requirements(blas_buffer);
-
-            let blas_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing BLAS",
-                requirements: blas_requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(blas_buffer),
-            })?;
-
-            self.device.device.bind_buffer_memory(
-                blas_buffer,
-                blas_allocation.memory(),
-                blas_allocation.offset(),
-            )?;
-
-            let blas_create_info = vk::AccelerationStructureCreateInfoKHR::default()
-                .buffer(blas_buffer)
-                .offset(0)
-                .size(blas_size_info.acceleration_structure_size)
-                .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL);
-
-            let blas = self
-                .device
-                .acceleration_structure_device
-                .create_acceleration_structure(&blas_create_info, None)?;
-
-            // Create scratch buffer for BLAS build
-            let scratch_buffer_create_info = vk::BufferCreateInfo::default()
-                .size(blas_size_info.build_scratch_size)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                )
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let scratch_buffer = self
-                .device
-                .device
-                .create_buffer(&scratch_buffer_create_info, None)?;
-
-            let scratch_requirements = self
-                .device
-                .device
-                .get_buffer_memory_requirements(scratch_buffer);
-
-            let scratch_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing Scratch Buffer",
-                requirements: scratch_requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(scratch_buffer),
-            })?;
-
-            self.device.device.bind_buffer_memory(
-                scratch_buffer,
-                scratch_allocation.memory(),
-                scratch_allocation.offset(),
-            )?;
-
-            let scratch_address = self.device.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(scratch_buffer),
-            );
-
-            // Build BLAS
-            let blas_build_info = blas_build_info
-                .dst_acceleration_structure(blas)
-                .scratch_data(vk::DeviceOrHostAddressKHR {
-                    device_address: scratch_address,
-                });
-
-            let blas_build_range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-                .primitive_count(primitive_count)
-                .primitive_offset(0)
-                .first_vertex(0)
-                .transform_offset(0);
-
-            // Create and submit command buffer for building BLAS
-            let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-                .queue_family_index(self.device.queue_family_index)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-
-            let command_pool = self
-                .device
-                .device
-                .create_command_pool(&command_pool_create_info, None)?;
-
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-
-            let command_buffer = self
-                .device
-                .device
-                .allocate_command_buffers(&command_buffer_allocate_info)?[0];
-
-            let begin_info = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-            self.device
-                .device
-                .begin_command_buffer(command_buffer, &begin_info)?;
-
-            self.device
-                .acceleration_structure_device
-                .cmd_build_acceleration_structures(
-                    command_buffer,
-                    &[blas_build_info],
-                    &[&[blas_build_range]],
-                );
-
-            // Add memory barrier to ensure BLAS build completes
-            let memory_barrier = vk::MemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR)
-                .dst_access_mask(vk::AccessFlags::ACCELERATION_STRUCTURE_READ_KHR);
-
-            self.device.device.cmd_pipeline_barrier(
-                command_buffer,
-                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
-                vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
-                vk::DependencyFlags::empty(),
-                &[memory_barrier],
-                &[],
-                &[],
-            );
-
-            self.device.device.end_command_buffer(command_buffer)?;
-
-            let submit_info =
-                vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&command_buffer));
-
-            self.device.device.queue_submit(
-                self.device.queue,
-                &[submit_info],
-                vk::Fence::null(),
-            )?;
-
-            self.device.device.queue_wait_idle(self.device.queue)?;
-            self.device.device.destroy_command_pool(command_pool, None);
-            self.device.device.destroy_buffer(scratch_buffer, None);
-            self.device.free(scratch_allocation)?;
-
-            // Get BLAS device address
-            let blas_address = self
-                .device
-                .acceleration_structure_device
-                .get_acceleration_structure_device_address(
-                    &vk::AccelerationStructureDeviceAddressInfoKHR::default()
-                        .acceleration_structure(blas),
-                );
-
-            // Create instance buffer (3 cube instances along X with 1 unit gap between surfaces)
-            // Cube is unit-sized ([-0.5, 0.5]), so center-to-center spacing is 2.0 for a 1.0 gap.
-            let instance_x_offsets = [-2.0_f32, 0.0, 2.0];
-
-            let instances: Vec<vk::AccelerationStructureInstanceKHR> = instance_x_offsets
-                .iter()
-                .enumerate()
-                .map(|(i, &x)| {
-                    let transform_matrix = vk::TransformMatrixKHR {
-                        // Row-major 3x4 affine transform. Translation lives in m03/m13/m23.
-                        matrix: [1.0, 0.0, 0.0, x, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                    };
-
-                    vk::AccelerationStructureInstanceKHR {
-                        transform: transform_matrix,
-                        instance_custom_index_and_mask: vk::Packed24_8::new(i as u32, 0xFF),
-                        instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
-                            0,
-                            vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw()
-                                as u8,
-                        ),
-                        acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-                            device_handle: blas_address,
-                        },
-                    }
-                })
-                .collect();
-
-            let instance_count = instances.len() as u32;
-            let instance_buffer_size =
-                (instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>()) as u64;
-            let instance_buffer_create_info = vk::BufferCreateInfo::default()
-                .size(instance_buffer_size)
-                .usage(
-                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                )
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let instance_buffer = self
-                .device
-                .device
-                .create_buffer(&instance_buffer_create_info, None)?;
-
-            let instance_requirements = self
-                .device
-                .device
-                .get_buffer_memory_requirements(instance_buffer);
-
-            let mut instance_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing Instance Buffer",
-                requirements: instance_requirements,
-                location: MemoryLocation::CpuToGpu,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(instance_buffer),
-            })?;
-
-            self.device.device.bind_buffer_memory(
-                instance_buffer,
-                instance_allocation.memory(),
-                instance_allocation.offset(),
-            )?;
-
-            // Copy instance data
-            let instance_slice = instance_allocation
-                .mapped_slice_mut()
-                .ok_or_else(|| anyhow!("Instance buffer is not mapped"))?;
-
-            // Safety: AccelerationStructureInstanceKHR is repr(C)
-            let instance_bytes = std::slice::from_raw_parts(
-                instances.as_ptr().cast::<u8>(),
-                instance_buffer_size as usize,
-            );
-            instance_slice[..instance_buffer_size as usize].copy_from_slice(instance_bytes);
-
-            let instance_buffer_address = self.device.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(instance_buffer),
-            );
-
-            // Build TLAS
-            let tlas_geometry = vk::AccelerationStructureGeometryKHR::default()
-                .geometry_type(vk::GeometryTypeKHR::INSTANCES)
-                .flags(vk::GeometryFlagsKHR::OPAQUE)
-                .geometry(vk::AccelerationStructureGeometryDataKHR {
-                    instances: vk::AccelerationStructureGeometryInstancesDataKHR::default()
-                        .array_of_pointers(false)
-                        .data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: instance_buffer_address,
-                        }),
-                });
-
-            let tlas_build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
-                .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL)
-                .flags(vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE)
-                .mode(vk::BuildAccelerationStructureModeKHR::BUILD)
-                .geometries(std::slice::from_ref(&tlas_geometry));
-
-            let mut tlas_size_info = vk::AccelerationStructureBuildSizesInfoKHR::default();
-
-            self.device
-                .acceleration_structure_device
-                .get_acceleration_structure_build_sizes(
-                    vk::AccelerationStructureBuildTypeKHR::DEVICE,
-                    &tlas_build_info,
-                    &[instance_count],
-                    &mut tlas_size_info,
-                );
-
-            // Create TLAS buffer
-            let tlas_buffer_create_info = vk::BufferCreateInfo::default()
-                .size(tlas_size_info.acceleration_structure_size)
-                .usage(
-                    vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
-                        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                )
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let tlas_buffer = self
-                .device
-                .device
-                .create_buffer(&tlas_buffer_create_info, None)?;
-            let tlas_requirements = self
-                .device
-                .device
-                .get_buffer_memory_requirements(tlas_buffer);
-
-            let tlas_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing TLAS",
-                requirements: tlas_requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(tlas_buffer),
-            })?;
-
-            self.device.device.bind_buffer_memory(
-                tlas_buffer,
-                tlas_allocation.memory(),
-                tlas_allocation.offset(),
-            )?;
-
-            let tlas_create_info = vk::AccelerationStructureCreateInfoKHR::default()
-                .buffer(tlas_buffer)
-                .offset(0)
-                .size(tlas_size_info.acceleration_structure_size)
-                .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL);
-
-            let tlas = self
-                .device
-                .acceleration_structure_device
-                .create_acceleration_structure(&tlas_create_info, None)?;
-
-            // Create scratch buffer for TLAS build
-            let scratch_buffer_create_info = vk::BufferCreateInfo::default()
-                .size(tlas_size_info.build_scratch_size)
-                .usage(
-                    vk::BufferUsageFlags::STORAGE_BUFFER
-                        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                )
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let scratch_buffer = self
-                .device
-                .device
-                .create_buffer(&scratch_buffer_create_info, None)?;
-
-            let scratch_requirements = self
-                .device
-                .device
-                .get_buffer_memory_requirements(scratch_buffer);
-
-            let scratch_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing Scratch Buffer",
-                requirements: scratch_requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(scratch_buffer),
-            })?;
-
-            self.device.device.bind_buffer_memory(
-                scratch_buffer,
-                scratch_allocation.memory(),
-                scratch_allocation.offset(),
-            )?;
-
-            let scratch_address = self.device.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(scratch_buffer),
-            );
-
-            // Build TLAS
-            let tlas_build_info = tlas_build_info
-                .dst_acceleration_structure(tlas)
-                .scratch_data(vk::DeviceOrHostAddressKHR {
-                    device_address: scratch_address,
-                });
-
-            let tlas_build_range = vk::AccelerationStructureBuildRangeInfoKHR::default()
-                .primitive_count(instance_count)
-                .primitive_offset(0)
-                .first_vertex(0)
-                .transform_offset(0);
-
-            // Create and submit command buffer for building TLAS
-            let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-                .queue_family_index(self.device.queue_family_index)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT);
-
-            let command_pool = self
-                .device
-                .device
-                .create_command_pool(&command_pool_create_info, None)?;
-
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1);
-
-            let command_buffer = self
-                .device
-                .device
-                .allocate_command_buffers(&command_buffer_allocate_info)?[0];
-
-            let begin_info = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-            self.device
-                .device
-                .begin_command_buffer(command_buffer, &begin_info)?;
-
-            self.device
-                .acceleration_structure_device
-                .cmd_build_acceleration_structures(
-                    command_buffer,
-                    &[tlas_build_info],
-                    &[&[tlas_build_range]],
-                );
-
-            self.device.device.end_command_buffer(command_buffer)?;
-
-            let submit_info =
-                vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&command_buffer));
-
-            self.device.device.queue_submit(
-                self.device.queue,
-                &[submit_info],
-                vk::Fence::null(),
-            )?;
-
-            self.device.device.queue_wait_idle(self.device.queue)?;
-
-            self.device.device.destroy_command_pool(command_pool, None);
-            self.device.device.destroy_buffer(scratch_buffer, None);
-            self.device.free(scratch_allocation)?;
-
             let pool_sizes = descriptor_set_layout_bindings
                 .iter()
                 .map(|binding| {
@@ -1298,26 +742,14 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .image_view(storage_image_view)
                 .image_layout(vk::ImageLayout::GENERAL);
 
-            let mut accel_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
-                .acceleration_structures(std::slice::from_ref(&tlas));
-
-            let write_descriptor_sets = [
-                vk::WriteDescriptorSet::default()
+            self.device.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
                     .dst_set(descriptor_set)
                     .dst_binding(0)
                     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                    .image_info(std::slice::from_ref(&image_info)),
-                vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
-                    .descriptor_count(1)
-                    .push_next(&mut accel_info),
-            ];
-
-            self.device
-                .device
-                .update_descriptor_sets(&write_descriptor_sets, &[]);
+                    .image_info(std::slice::from_ref(&image_info))],
+                &[],
+            );
 
             Ok(RayTracingPipeline {
                 device: self.device,
@@ -1328,18 +760,6 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 storage_image_view,
                 storage_image_allocation,
                 storage_image_extent,
-                vertex_buffer,
-                vertex_allocation,
-                index_buffer,
-                index_allocation,
-                blas,
-                blas_buffer,
-                blas_allocation,
-                tlas,
-                tlas_buffer,
-                tlas_allocation,
-                instance_buffer,
-                instance_allocation,
                 descriptor_set,
             })
         }
