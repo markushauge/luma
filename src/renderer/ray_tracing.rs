@@ -13,13 +13,13 @@ use crate::{
     camera::Camera,
     renderer::{
         Device, Renderer,
-        acceleration_structure::Vertex,
-        schedule::{Render, RenderStartup, RenderSystems},
+        acceleration_structure::AccelerationStructurePlugin,
+        schedule::{Render, RenderSystems},
     },
     shader::Shader,
 };
 
-use super::acceleration_structure::{BlasInstance, Tlas};
+use super::acceleration_structure::{AccelerationStructureManager, Tlas};
 
 #[derive(Default)]
 pub struct RayTracingPlugin {
@@ -29,8 +29,8 @@ pub struct RayTracingPlugin {
 impl Plugin for RayTracingPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.settings.clone())
+            .add_plugins(AccelerationStructurePlugin)
             .add_systems(Startup, load_shaders)
-            .add_systems(RenderStartup, build_acceleration_structures)
             .add_systems(
                 Render,
                 (
@@ -69,63 +69,6 @@ fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
         miss: asset_server.load("shaders/miss.rmiss"),
         closest_hit: asset_server.load("shaders/closest_hit.rchit"),
     });
-}
-
-fn build_acceleration_structures(
-    mut commands: Commands,
-    renderer: Res<Renderer>,
-) -> Result<(), BevyError> {
-    let vertices = [
-        Vertex {
-            pos: [-0.5, -0.5, -0.5],
-        },
-        Vertex {
-            pos: [0.5, -0.5, -0.5],
-        },
-        Vertex {
-            pos: [0.5, 0.5, -0.5],
-        },
-        Vertex {
-            pos: [-0.5, 0.5, -0.5],
-        },
-        Vertex {
-            pos: [-0.5, -0.5, 0.5],
-        },
-        Vertex {
-            pos: [0.5, -0.5, 0.5],
-        },
-        Vertex {
-            pos: [0.5, 0.5, 0.5],
-        },
-        Vertex {
-            pos: [-0.5, 0.5, 0.5],
-        },
-    ];
-
-    let indices = [
-        0, 1, 2, 2, 3, 0, // Front
-        1, 5, 6, 6, 2, 1, // Right
-        5, 4, 7, 7, 6, 5, // Back
-        4, 0, 3, 3, 7, 4, // Left
-        3, 2, 6, 6, 7, 3, // Top
-        4, 5, 1, 1, 0, 4, // Bottom
-    ];
-
-    let blas = renderer.device.create_blas(&vertices, &indices)?;
-
-    // 3 cube instances along X with 1 unit gap between surfaces.
-    // Cube is unit-sized ([-0.5, 0.5]), so center-to-center spacing is 2.0.
-    let instances = [-2.0_f32, 0.0, 2.0].map(|x| BlasInstance {
-        blas: &blas,
-        transform: Transform::from_xyz(x, 0.0, 0.0),
-    });
-
-    let tlas = renderer.device.create_tlas(&instances)?;
-
-    commands.insert_resource(blas);
-    commands.insert_resource(tlas);
-
-    Ok(())
 }
 
 fn create_or_update_ray_tracing_pipeline(
@@ -177,7 +120,7 @@ fn create_or_update_ray_tracing_pipeline(
 fn execute_ray_tracing_pipeline(
     renderer: Res<Renderer>,
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
-    tlas: Option<Res<Tlas>>,
+    acceleration_structure_manager: Res<AccelerationStructureManager>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
     time: Res<Time>,
 ) -> Result<(), BevyError> {
@@ -185,7 +128,7 @@ fn execute_ray_tracing_pipeline(
         return Ok(());
     };
 
-    let Some(tlas) = tlas else {
+    let Some(tlas) = acceleration_structure_manager.tlas() else {
         return Ok(());
     };
 
@@ -193,7 +136,7 @@ fn execute_ray_tracing_pipeline(
 
     ray_tracing_pipeline.trace_rays(
         renderer.command_buffer,
-        &tlas,
+        tlas,
         camera_transform,
         camera.vertical_fov(),
         time.elapsed().as_millis() as u32,
@@ -237,7 +180,7 @@ impl RayTracingPipeline {
         unsafe {
             let mut acceleration_structure_info =
                 vk::WriteDescriptorSetAccelerationStructureKHR::default()
-                    .acceleration_structures(std::slice::from_ref(&tlas.acceleration_structure));
+                    .acceleration_structures(std::slice::from_ref(tlas.acceleration_structure()));
 
             self.device.device.update_descriptor_sets(
                 &[vk::WriteDescriptorSet::default()

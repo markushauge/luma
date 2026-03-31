@@ -1,28 +1,156 @@
-use std::mem::size_of;
+use std::{collections::HashMap, mem::size_of};
 
 use anyhow::{Result, anyhow};
 use ash::vk;
-use bevy::prelude::*;
-use bytemuck::{Pod, Zeroable};
+use bevy::{
+    mesh::{Indices, VertexAttributeValues},
+    prelude::*,
+};
 use gpu_allocator::{
     MemoryLocation,
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
 };
 
-use super::Device;
+use super::{
+    Device, Renderer,
+    schedule::{Render, RenderStartup},
+};
 
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub struct Vertex {
-    pub pos: [f32; 3],
+pub struct AccelerationStructurePlugin;
+
+impl Plugin for AccelerationStructurePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(RenderStartup, create_acceleration_structure_manager)
+            .add_systems(Render, (build_blases, build_tlas).chain());
+    }
+}
+
+fn create_acceleration_structure_manager(mut commands: Commands, renderer: Res<Renderer>) {
+    commands.insert_resource(AccelerationStructureManager::new(renderer.device.clone()));
+}
+
+fn build_blases(
+    mut manager: ResMut<AccelerationStructureManager>,
+    meshes: Res<Assets<Mesh>>,
+    mut asset_events: MessageReader<AssetEvent<Mesh>>,
+) {
+    for asset_event in asset_events.read() {
+        if let AssetEvent::Added { id } = asset_event {
+            let Some(mesh) = meshes.get(*id) else {
+                tracing::error!("Mesh with ID {} not found in Assets<Mesh>.", id);
+                continue;
+            };
+
+            if let Err(err) = manager.insert_mesh(*id, mesh) {
+                tracing::error!("{}", err);
+                continue;
+            }
+
+            manager.tlas_dirty = true;
+        }
+    }
+}
+
+fn build_tlas(
+    mut manager: ResMut<AccelerationStructureManager>,
+    query: Query<(&Transform, &Mesh3d)>,
+    changed_mesh3d: Query<(), Changed<Mesh3d>>,
+    changed_transform: Query<(), (Changed<Transform>, With<Mesh3d>)>,
+    removed_mesh3d: RemovedComponents<Mesh3d>,
+) {
+    manager.tlas_dirty |=
+        !changed_mesh3d.is_empty() || !changed_transform.is_empty() || !removed_mesh3d.is_empty();
+
+    if !manager.tlas_dirty {
+        return;
+    }
+
+    let instances: Vec<_> = query
+        .iter()
+        .filter_map(|(transform, Mesh3d(mesh_handle))| {
+            let blas = manager.blases.get(&mesh_handle.id())?;
+            Some(BlasInstance {
+                blas,
+                transform: *transform,
+            })
+        })
+        .collect();
+
+    if instances.is_empty() {
+        return;
+    }
+
+    let tlas = match manager.device.create_tlas(&instances) {
+        Ok(tlas) => tlas,
+        Err(err) => {
+            tracing::error!("{}", err);
+            return;
+        }
+    };
+
+    manager.tlas = Some(tlas);
+    manager.tlas_dirty = false;
+}
+
+#[derive(Resource)]
+pub struct AccelerationStructureManager {
+    device: Device,
+    blases: HashMap<AssetId<Mesh>, Blas>,
+    tlas: Option<Tlas>,
+    tlas_dirty: bool,
+}
+
+impl AccelerationStructureManager {
+    fn new(device: Device) -> Self {
+        Self {
+            device,
+            blases: HashMap::new(),
+            tlas: None,
+            tlas_dirty: false,
+        }
+    }
+
+    fn insert_mesh(&mut self, asset_id: AssetId<Mesh>, mesh: &Mesh) -> Result<()> {
+        let Some(VertexAttributeValues::Float32x3(vertices)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            anyhow::bail!("Mesh does not contain [f32; 3] positions.");
+        };
+
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            anyhow::bail!("Mesh does not contain u32 indices.");
+        };
+
+        let blas = self.device.create_blas(vertices, indices)?;
+        self.blases.insert(asset_id, blas);
+        Ok(())
+    }
+
+    pub fn tlas(&self) -> Option<&Tlas> {
+        self.tlas.as_ref()
+    }
+}
+
+impl Drop for AccelerationStructureManager {
+    fn drop(&mut self) {
+        unsafe {
+            for (_, blas) in std::mem::take(&mut self.blases) {
+                self.device.destroy_blas(blas);
+            }
+
+            if let Some(tlas) = self.tlas.take() {
+                self.device.destroy_tlas(tlas);
+            }
+        }
+    }
 }
 
 #[derive(Resource)]
 pub struct Blas {
-    pub acceleration_structure: vk::AccelerationStructureKHR,
-    pub buffer: vk::Buffer,
-    pub allocation: Allocation,
-    pub device_address: vk::DeviceAddress,
+    acceleration_structure: vk::AccelerationStructureKHR,
+    buffer: vk::Buffer,
+    allocation: Allocation,
+    device_address: vk::DeviceAddress,
     vertex_buffer: vk::Buffer,
     vertex_allocation: Allocation,
     index_buffer: vk::Buffer,
@@ -36,15 +164,21 @@ pub struct BlasInstance<'a> {
 
 #[derive(Resource)]
 pub struct Tlas {
-    pub acceleration_structure: vk::AccelerationStructureKHR,
-    pub buffer: vk::Buffer,
-    pub allocation: Allocation,
+    acceleration_structure: vk::AccelerationStructureKHR,
+    buffer: vk::Buffer,
+    allocation: Allocation,
     instance_buffer: vk::Buffer,
     instance_allocation: Allocation,
 }
 
+impl Tlas {
+    pub fn acceleration_structure(&self) -> &vk::AccelerationStructureKHR {
+        &self.acceleration_structure
+    }
+}
+
 impl Device {
-    pub fn create_blas(&self, vertices: &[Vertex], indices: &[u32]) -> Result<Blas> {
+    pub fn create_blas(&self, vertices: &[[f32; 3]], indices: &[u32]) -> Result<Blas> {
         unsafe {
             let vertex_buffer_size = size_of_val(vertices) as u64;
             let vertex_buffer = self.device.create_buffer(
@@ -133,7 +267,7 @@ impl Device {
                         .vertex_data(vk::DeviceOrHostAddressConstKHR {
                             device_address: vertex_buffer_address,
                         })
-                        .vertex_stride(size_of::<Vertex>() as u64)
+                        .vertex_stride(size_of::<[f32; 3]>() as u64)
                         .max_vertex(vertices.len() as u32 - 1)
                         .index_type(vk::IndexType::UINT32)
                         .index_data(vk::DeviceOrHostAddressConstKHR {
@@ -312,29 +446,25 @@ impl Device {
             })
         }
     }
-}
 
-impl Blas {
-    #[expect(dead_code)]
-    pub unsafe fn destroy(self, device: &Device) {
+    pub unsafe fn destroy_blas(&self, blas: Blas) {
         unsafe {
-            device
-                .acceleration_structure_device
-                .destroy_acceleration_structure(self.acceleration_structure, None);
-            device.device.destroy_buffer(self.buffer, None);
-            device.free(self.allocation).unwrap();
-            device.device.destroy_buffer(self.index_buffer, None);
-            device.free(self.index_allocation).unwrap();
-            device.device.destroy_buffer(self.vertex_buffer, None);
-            device.free(self.vertex_allocation).unwrap();
+            self.acceleration_structure_device
+                .destroy_acceleration_structure(blas.acceleration_structure, None);
+            self.device.destroy_buffer(blas.buffer, None);
+            self.free(blas.allocation).unwrap();
+            self.device.destroy_buffer(blas.index_buffer, None);
+            self.free(blas.index_allocation).unwrap();
+            self.device.destroy_buffer(blas.vertex_buffer, None);
+            self.free(blas.vertex_allocation).unwrap();
         }
     }
 }
 
 impl Device {
-    pub fn create_tlas(&self, instances: &[BlasInstance<'_>]) -> Result<Tlas> {
+    pub fn create_tlas(&self, instances: &[BlasInstance]) -> Result<Tlas> {
         unsafe {
-            let vk_instances: Vec<vk::AccelerationStructureInstanceKHR> = instances
+            let instances: Vec<vk::AccelerationStructureInstanceKHR> = instances
                 .iter()
                 .map(|instance| {
                     let affine = instance.transform.compute_affine();
@@ -366,9 +496,9 @@ impl Device {
                 })
                 .collect();
 
-            let instance_count = vk_instances.len() as u32;
+            let instance_count = instances.len() as u32;
             let instance_buffer_size =
-                (vk_instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>()) as u64;
+                (instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>()) as u64;
 
             let instance_buffer = self.device.create_buffer(
                 &vk::BufferCreateInfo::default()
@@ -403,7 +533,7 @@ impl Device {
 
             // Safety: AccelerationStructureInstanceKHR is repr(C)
             let instance_bytes = std::slice::from_raw_parts(
-                vk_instances.as_ptr().cast::<u8>(),
+                instances.as_ptr().cast::<u8>(),
                 instance_buffer_size as usize,
             );
             instance_slice[..instance_buffer_size as usize].copy_from_slice(instance_bytes);
@@ -570,19 +700,15 @@ impl Device {
             })
         }
     }
-}
 
-impl Tlas {
-    #[expect(dead_code)]
-    pub unsafe fn destroy(self, device: &Device) {
+    pub unsafe fn destroy_tlas(&self, tlas: Tlas) {
         unsafe {
-            device
-                .acceleration_structure_device
-                .destroy_acceleration_structure(self.acceleration_structure, None);
-            device.device.destroy_buffer(self.buffer, None);
-            device.free(self.allocation).unwrap();
-            device.device.destroy_buffer(self.instance_buffer, None);
-            device.free(self.instance_allocation).unwrap();
+            self.acceleration_structure_device
+                .destroy_acceleration_structure(tlas.acceleration_structure, None);
+            self.device.destroy_buffer(tlas.buffer, None);
+            self.free(tlas.allocation).unwrap();
+            self.device.destroy_buffer(tlas.instance_buffer, None);
+            self.free(tlas.instance_allocation).unwrap();
         }
     }
 }
