@@ -14,6 +14,7 @@ use crate::{camera::Camera, shader::Shader};
 use super::{
     Device, Renderer,
     acceleration_structure::{AccelerationStructureManager, AccelerationStructurePlugin, Tlas},
+    resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderSystems},
     storage_image::StorageImage,
 };
@@ -70,7 +71,7 @@ fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 fn create_or_update_ray_tracing_pipeline(
     mut commands: Commands,
-    renderer: Res<Renderer>,
+    mut renderer: ResMut<Renderer>,
     ray_tracing_pipeline: Option<ResMut<RayTracingPipeline>>,
     settings: Res<RayTracingSettings>,
     ray_tracing_shaders: Res<RayTracingShaders>,
@@ -107,7 +108,7 @@ fn create_or_update_ray_tracing_pipeline(
         }
         Some(mut ray_tracing_pipeline) => {
             if ray_tracing_pipeline.storage_image.extent != extent {
-                ray_tracing_pipeline.recreate_storage_image(extent)?;
+                ray_tracing_pipeline.recreate_storage_image(extent, &mut renderer.tracker)?;
             }
         }
     }
@@ -116,7 +117,7 @@ fn create_or_update_ray_tracing_pipeline(
 }
 
 fn execute_ray_tracing_pipeline(
-    renderer: Res<Renderer>,
+    mut renderer: ResMut<Renderer>,
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
     acceleration_structure_manager: Res<AccelerationStructureManager>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
@@ -132,19 +133,21 @@ fn execute_ray_tracing_pipeline(
 
     let (camera, camera_transform) = camera.single()?;
 
+    let command_buffer = renderer.command_buffer;
+    let present_image = renderer.swapchain.present_image().image;
+    let present_image_extent = renderer.swapchain.surface_extent;
+    let tracker = &mut renderer.tracker;
+
     ray_tracing_pipeline.trace_rays(
-        renderer.command_buffer,
+        command_buffer,
+        tracker,
         tlas,
         camera_transform,
         camera.vertical_fov(),
         time.elapsed().as_millis() as u32,
     );
 
-    ray_tracing_pipeline.blit(
-        renderer.command_buffer,
-        renderer.swapchain.present_image().image,
-        renderer.swapchain.surface_extent,
-    );
+    ray_tracing_pipeline.blit(command_buffer, tracker, present_image, present_image_extent);
 
     Ok(())
 }
@@ -167,6 +170,7 @@ impl RayTracingPipeline {
     pub fn trace_rays(
         &self,
         command_buffer: vk::CommandBuffer,
+        tracker: &mut ResourceStateTracker,
         tlas: &Tlas,
         camera_transform: &Transform,
         camera_fov: f32,
@@ -188,12 +192,16 @@ impl RayTracingPipeline {
             );
         }
 
-        self.device.transition_image(
-            command_buffer,
-            self.storage_image.image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::GENERAL,
-        );
+        tracker
+            .transition_image(
+                self.storage_image.image,
+                ImageState {
+                    layout: vk::ImageLayout::GENERAL,
+                    access: vk::AccessFlags2::SHADER_STORAGE_WRITE,
+                    stages: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
+                },
+            )
+            .flush(&self.device, command_buffer);
 
         let push_constants = PushConstants {
             viewport_width: self.storage_image.extent.width,
@@ -244,15 +252,20 @@ impl RayTracingPipeline {
     pub fn blit(
         &self,
         command_buffer: vk::CommandBuffer,
+        tracker: &mut ResourceStateTracker,
         present_image: vk::Image,
         present_image_extent: vk::Extent2D,
     ) {
-        self.device.transition_image(
-            command_buffer,
-            self.storage_image.image,
-            vk::ImageLayout::GENERAL,
-            vk::ImageLayout::GENERAL,
-        );
+        tracker
+            .transition_image(
+                self.storage_image.image,
+                ImageState {
+                    layout: vk::ImageLayout::GENERAL,
+                    access: vk::AccessFlags2::TRANSFER_READ,
+                    stages: vk::PipelineStageFlags2::TRANSFER,
+                },
+            )
+            .flush(&self.device, command_buffer);
 
         let subresource = vk::ImageSubresourceLayers {
             aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -296,7 +309,11 @@ impl RayTracingPipeline {
         }
     }
 
-    pub fn recreate_storage_image(&mut self, extent: vk::Extent2D) -> Result<()> {
+    pub fn recreate_storage_image(
+        &mut self,
+        extent: vk::Extent2D,
+        tracker: &mut ResourceStateTracker,
+    ) -> Result<()> {
         self.device.wait_idle()?;
 
         let new_storage_image = self
@@ -320,6 +337,7 @@ impl RayTracingPipeline {
         }
 
         let old_storage_image = std::mem::replace(&mut self.storage_image, new_storage_image);
+        tracker.untrack_image(old_storage_image.image);
         self.device.destroy_storage_image(old_storage_image);
         Ok(())
     }

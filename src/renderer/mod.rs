@@ -2,6 +2,7 @@ pub mod acceleration_structure;
 mod device;
 pub mod egui_renderer;
 pub mod ray_tracing;
+mod resource_state_tracker;
 mod schedule;
 mod storage_image;
 mod swapchain;
@@ -12,6 +13,7 @@ use bevy::{
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
 };
+use resource_state_tracker::{ImageState, ResourceStateTracker};
 
 use crate::shader::ShaderPlugin;
 
@@ -92,6 +94,7 @@ pub struct Renderer {
     command_buffer: vk::CommandBuffer,
     semaphore: vk::Semaphore,
     fence: vk::Fence,
+    tracker: ResourceStateTracker,
 }
 
 impl Renderer {
@@ -137,6 +140,8 @@ impl Renderer {
             device.device.create_fence(&fence_create_info, None)?
         };
 
+        let tracker = ResourceStateTracker::new();
+
         Ok(Self {
             handle,
             device,
@@ -145,6 +150,7 @@ impl Renderer {
             command_buffer,
             semaphore,
             fence,
+            tracker,
         })
     }
 
@@ -158,12 +164,17 @@ impl Renderer {
 
         let present_image = self.swapchain.present_image();
 
-        self.device.transition_image(
-            self.command_buffer,
-            present_image.image,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::GENERAL,
-        );
+        self.tracker
+            .track_image(present_image.image)
+            .transition_image(
+                present_image.image,
+                ImageState {
+                    layout: vk::ImageLayout::GENERAL,
+                    access: vk::AccessFlags2::TRANSFER_WRITE,
+                    stages: vk::PipelineStageFlags2::TRANSFER,
+                },
+            )
+            .flush(&self.device, self.command_buffer);
 
         Ok(())
     }
@@ -171,12 +182,16 @@ impl Renderer {
     pub fn end(&mut self) -> Result<()> {
         let present_image = self.swapchain.present_image();
 
-        self.device.transition_image(
-            self.command_buffer,
-            present_image.image,
-            vk::ImageLayout::GENERAL,
-            vk::ImageLayout::PRESENT_SRC_KHR,
-        );
+        self.tracker
+            .transition_image(
+                present_image.image,
+                ImageState {
+                    layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                    access: vk::AccessFlags2::empty(),
+                    stages: vk::PipelineStageFlags2::empty(),
+                },
+            )
+            .flush(&self.device, self.command_buffer);
 
         self.device.end_frame(
             self.command_buffer,
@@ -191,6 +206,10 @@ impl Renderer {
 
     pub fn recreate_swapchain(&mut self, width: u32, height: u32) -> Result<()> {
         self.device.wait_idle()?;
+
+        for present_image in &self.swapchain.present_images {
+            self.tracker.untrack_image(present_image.image);
+        }
 
         self.swapchain = Swapchain::new(
             self.device.clone(),

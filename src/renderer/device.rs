@@ -109,6 +109,9 @@ impl Device {
                 vk::PhysicalDeviceBufferDeviceAddressFeatures::default()
                     .buffer_device_address(true);
 
+            let mut synchronization2_features =
+                vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
+
             let device_extensions = device_extensions
                 .into_iter()
                 .map(|extension| extension.as_ptr())
@@ -121,7 +124,8 @@ impl Device {
                 .push_next(&mut scalar_block_layout_features)
                 .push_next(&mut ray_tracing_pipeline_features)
                 .push_next(&mut acceleration_structure_features)
-                .push_next(&mut buffer_device_address_features);
+                .push_next(&mut buffer_device_address_features)
+                .push_next(&mut synchronization2_features);
 
             let device = instance.create_device(physical_device, &device_create_info, None)?;
             let swapchain_device = khr::swapchain::Device::new(&instance, &device);
@@ -205,41 +209,6 @@ impl Device {
                 .queue_submit(self.queue, &[submit_info], fence)?;
 
             Ok(())
-        }
-    }
-
-    pub fn transition_image(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        image: vk::Image,
-        old_layout: vk::ImageLayout,
-        new_layout: vk::ImageLayout,
-    ) {
-        let subresource_range = vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_mip_level(0)
-            .level_count(1)
-            .base_array_layer(0)
-            .layer_count(1);
-
-        let barrier = vk::ImageMemoryBarrier::default()
-            .old_layout(old_layout)
-            .new_layout(new_layout)
-            .image(image)
-            .subresource_range(subresource_range)
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-            .dst_access_mask(vk::AccessFlags::MEMORY_READ);
-
-        unsafe {
-            self.device.cmd_pipeline_barrier(
-                command_buffer,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier],
-            );
         }
     }
 
