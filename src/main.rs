@@ -12,8 +12,8 @@ use crate::{
     camera::{Camera, CameraPlugin},
     renderer::{
         RendererPlugin,
-        compute_pipeline::{ComputePipelinePlugin, ComputePipelineSettings},
         egui_renderer::{EguiContext, EguiPass, EguiPassSystems, EguiPlugin},
+        ray_tracing::RayTracingPlugin,
     },
 };
 
@@ -31,22 +31,24 @@ fn main() -> AppExit {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(RendererPlugin)
         .add_plugins(CameraPlugin)
-        .add_plugins(ComputePipelinePlugin {
-            settings: ComputePipelineSettings {
-                resolution_scaling: 0.25,
-            },
-        })
+        .add_plugins(RayTracingPlugin::default())
         .add_plugins(EguiPlugin)
         .add_systems(Startup, setup)
         .add_systems(EguiPass, render_ui.in_set(EguiPassSystems::Render))
         .run()
 }
 
-fn setup(mut commands: Commands) {
+fn setup(mut commands: Commands, mut assets: ResMut<Assets<Mesh>>) {
     commands.spawn((
         Camera::default(),
         Transform::from_xyz(0.0, 0.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+
+    let cube = assets.add(Cuboid::new(1.0, 1.0, 1.0).mesh().build());
+
+    for x in [-2.0_f32, 0.0, 2.0] {
+        commands.spawn((Transform::from_xyz(x, 0.0, 0.0), Mesh3d(cube.clone())));
+    }
 }
 
 fn render_ui(

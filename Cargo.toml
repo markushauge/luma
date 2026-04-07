@@ -32,6 +32,7 @@ features = [
     "bevy_asset",
     "bevy_gilrs",
     "bevy_log",
+    "bevy_mesh",
     "bevy_state",
     "bevy_window",
     "bevy_winit",

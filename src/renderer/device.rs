@@ -1,5 +1,6 @@
 use std::{
-    ffi::c_char,
+    collections::HashSet,
+    ffi::{CStr, c_char},
     sync::{Arc, Mutex},
 };
 
@@ -21,6 +22,9 @@ pub struct DeviceInner {
     pub queue_family_index: u32,
     pub device: ash::Device,
     pub swapchain_device: khr::swapchain::Device,
+    pub ray_tracing_pipeline_device: khr::ray_tracing_pipeline::Device,
+    pub acceleration_structure_device: khr::acceleration_structure::Device,
+    pub deferred_host_operations_device: khr::deferred_host_operations::Device,
     pub queue: vk::Queue,
     pub allocator: Arc<Mutex<Allocator>>,
 }
@@ -67,20 +71,66 @@ impl Device {
 
             let device_extensions = Self::device_extensions();
 
+            let device_extensions_properties =
+                instance.enumerate_device_extension_properties(physical_device)?;
+
+            let device_extension_properties = device_extensions_properties
+                .iter()
+                .map(|extension| extension.extension_name_as_c_str())
+                .collect::<Result<HashSet<_>, _>>()?;
+
+            let unsupported_device_extensions = device_extensions
+                .iter()
+                .filter(|extension| !device_extension_properties.contains(*extension))
+                .collect::<Vec<_>>();
+
+            if !unsupported_device_extensions.is_empty() {
+                return Err(anyhow!(
+                    "Unsupported device extensions: {:?}",
+                    unsupported_device_extensions
+                ));
+            }
+
             let mut dynamic_rendering_features =
                 vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
 
             let mut scalar_block_layout_features =
                 vk::PhysicalDeviceScalarBlockLayoutFeatures::default().scalar_block_layout(true);
 
+            let mut ray_tracing_pipeline_features =
+                vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default()
+                    .ray_tracing_pipeline(true);
+
+            let mut acceleration_structure_features =
+                vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+                    .acceleration_structure(true);
+
+            let mut buffer_device_address_features =
+                vk::PhysicalDeviceBufferDeviceAddressFeatures::default()
+                    .buffer_device_address(true);
+
+            let device_extensions = device_extensions
+                .into_iter()
+                .map(|extension| extension.as_ptr())
+                .collect::<Vec<_>>();
+
             let device_create_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(std::slice::from_ref(&queue_create_info))
                 .enabled_extension_names(&device_extensions)
                 .push_next(&mut dynamic_rendering_features)
-                .push_next(&mut scalar_block_layout_features);
+                .push_next(&mut scalar_block_layout_features)
+                .push_next(&mut ray_tracing_pipeline_features)
+                .push_next(&mut acceleration_structure_features)
+                .push_next(&mut buffer_device_address_features);
 
             let device = instance.create_device(physical_device, &device_create_info, None)?;
             let swapchain_device = khr::swapchain::Device::new(&instance, &device);
+            let ray_tracing_pipeline_device =
+                khr::ray_tracing_pipeline::Device::new(&instance, &device);
+            let acceleration_structure_device =
+                khr::acceleration_structure::Device::new(&instance, &device);
+            let deferred_host_operations_device =
+                khr::deferred_host_operations::Device::new(&instance, &device);
             let queue = device.get_device_queue(queue_family_index, 0);
 
             let allocater_create_desc = AllocatorCreateDesc {
@@ -88,7 +138,7 @@ impl Device {
                 device: device.clone(),
                 physical_device,
                 debug_settings: Default::default(),
-                buffer_device_address: false,
+                buffer_device_address: true,
                 allocation_sizes: Default::default(),
             };
 
@@ -103,6 +153,9 @@ impl Device {
                 queue_family_index,
                 device,
                 swapchain_device,
+                ray_tracing_pipeline_device,
+                acceleration_structure_device,
+                deferred_host_operations_device,
                 queue,
                 allocator,
             };
@@ -206,6 +259,18 @@ impl Device {
         unsafe { self.device.device_wait_idle().map_err(Into::into) }
     }
 
+    pub fn get_physical_device_ray_tracing_pipeline_properties(
+        &self,
+    ) -> vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'_> {
+        unsafe {
+            let mut props = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::default();
+            let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut props);
+            self.instance
+                .get_physical_device_properties2(self.physical_device, &mut props2);
+            props
+        }
+    }
+
     fn api_version() -> u32 {
         vk::API_VERSION_1_3
     }
@@ -221,10 +286,13 @@ impl Device {
         instance_layers
     }
 
-    fn device_extensions() -> Vec<*const c_char> {
+    fn device_extensions() -> Vec<&'static CStr> {
         vec![
-            khr::swapchain::NAME.as_ptr(),
-            khr::dynamic_rendering::NAME.as_ptr(),
+            khr::swapchain::NAME,
+            khr::dynamic_rendering::NAME,
+            khr::ray_tracing_pipeline::NAME,
+            khr::acceleration_structure::NAME,
+            khr::deferred_host_operations::NAME,
         ]
     }
 }
