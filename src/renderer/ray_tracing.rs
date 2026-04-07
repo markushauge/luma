@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::{Result, anyhow};
-use ash::vk::{self, Extent2D};
+use ash::vk;
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
 use gpu_allocator::{
@@ -9,17 +9,14 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
 };
 
-use crate::{
-    camera::Camera,
-    renderer::{
-        Device, Renderer,
-        acceleration_structure::AccelerationStructurePlugin,
-        schedule::{Render, RenderSystems},
-    },
-    shader::Shader,
-};
+use crate::{camera::Camera, shader::Shader};
 
-use super::acceleration_structure::{AccelerationStructureManager, Tlas};
+use super::{
+    Device, Renderer,
+    acceleration_structure::{AccelerationStructureManager, AccelerationStructurePlugin, Tlas},
+    schedule::{Render, RenderSystems},
+    storage_image::StorageImage,
+};
 
 #[derive(Default)]
 pub struct RayTracingPlugin {
@@ -91,9 +88,12 @@ fn create_or_update_ray_tracing_pipeline(
         return Ok(());
     };
 
-    let Extent2D { width, height } = renderer.swapchain.surface_extent;
-    let expected_width = (width as f32 * settings.resolution_scaling) as u32;
-    let expected_height = (height as f32 * settings.resolution_scaling) as u32;
+    let vk::Extent2D { width, height } = renderer.swapchain.surface_extent;
+
+    let extent = vk::Extent2D {
+        width: (width as f32 * settings.resolution_scaling) as u32,
+        height: (height as f32 * settings.resolution_scaling) as u32,
+    };
 
     match ray_tracing_pipeline {
         None => {
@@ -102,14 +102,12 @@ fn create_or_update_ray_tracing_pipeline(
                     .with_raygen_shader_group(raygen_shader)?
                     .with_miss_shader_group(miss_shader)?
                     .with_hit_shader_group(closest_hit_shader, None, None)?
-                    .build(expected_width, expected_height)?,
+                    .build(extent)?,
             );
         }
         Some(mut ray_tracing_pipeline) => {
-            let vk::Extent3D { width, height, .. } = ray_tracing_pipeline.storage_image_extent;
-
-            if width != expected_width || height != expected_height {
-                ray_tracing_pipeline.recreate_storage_image(expected_width, expected_height)?;
+            if ray_tracing_pipeline.storage_image.extent != extent {
+                ray_tracing_pipeline.recreate_storage_image(extent)?;
             }
         }
     }
@@ -157,10 +155,7 @@ pub struct RayTracingPipeline {
     pub pipeline: vk::Pipeline,
     pub pipeline_layout: vk::PipelineLayout,
     pub shader_binding_table: ShaderBindingTable,
-    pub storage_image: vk::Image,
-    pub storage_image_view: vk::ImageView,
-    pub storage_image_allocation: Allocation,
-    pub storage_image_extent: vk::Extent3D,
+    pub storage_image: StorageImage,
     pub descriptor_set: vk::DescriptorSet,
 }
 
@@ -195,14 +190,14 @@ impl RayTracingPipeline {
 
         self.device.transition_image(
             command_buffer,
-            self.storage_image,
+            self.storage_image.image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::GENERAL,
         );
 
         let push_constants = PushConstants {
-            viewport_width: self.storage_image_extent.width,
-            viewport_height: self.storage_image_extent.height,
+            viewport_width: self.storage_image.extent.width,
+            viewport_height: self.storage_image.extent.height,
             camera_translation: camera_transform.translation,
             camera_rotation: Mat3::from_quat(camera_transform.rotation),
             camera_fov,
@@ -239,8 +234,8 @@ impl RayTracingPipeline {
                 &self.shader_binding_table.miss_region,
                 &self.shader_binding_table.hit_region,
                 &self.shader_binding_table.callable_region,
-                self.storage_image_extent.width,
-                self.storage_image_extent.height,
+                self.storage_image.extent.width,
+                self.storage_image.extent.height,
                 1,
             );
         }
@@ -254,7 +249,7 @@ impl RayTracingPipeline {
     ) {
         self.device.transition_image(
             command_buffer,
-            self.storage_image,
+            self.storage_image.image,
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::GENERAL,
         );
@@ -266,8 +261,8 @@ impl RayTracingPipeline {
             layer_count: 1,
         };
 
-        let x = self.storage_image_extent.width as i32;
-        let y = self.storage_image_extent.height as i32;
+        let x = self.storage_image.extent.width as i32;
+        let y = self.storage_image.extent.height as i32;
 
         let src_offsets = [
             vk::Offset3D { x: 0, y: 0, z: 0 },
@@ -291,7 +286,7 @@ impl RayTracingPipeline {
         unsafe {
             self.device.device.cmd_blit_image(
                 command_buffer,
-                self.storage_image,
+                self.storage_image.image,
                 vk::ImageLayout::GENERAL,
                 present_image,
                 vk::ImageLayout::GENERAL,
@@ -301,97 +296,31 @@ impl RayTracingPipeline {
         }
     }
 
-    pub fn recreate_storage_image(&mut self, width: u32, height: u32) -> Result<()> {
+    pub fn recreate_storage_image(&mut self, extent: vk::Extent2D) -> Result<()> {
+        self.device.wait_idle()?;
+
+        let new_storage_image = self
+            .device
+            .create_storage_image(extent, vk::Format::R8G8B8A8_UNORM)?;
+
+        let image_info = vk::DescriptorImageInfo::default()
+            .image_view(new_storage_image.image_view)
+            .image_layout(vk::ImageLayout::GENERAL);
+
+        let write_descriptor_set = vk::WriteDescriptorSet::default()
+            .dst_set(self.descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(std::slice::from_ref(&image_info));
+
         unsafe {
-            self.device.wait_idle()?;
-
-            self.device
-                .device
-                .destroy_image_view(self.storage_image_view, None);
-
-            self.device
-                .free(std::mem::take(&mut self.storage_image_allocation));
-
-            self.device.device.destroy_image(self.storage_image, None);
-
-            let storage_image_extent = vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            };
-
-            let storage_image_create_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .extent(storage_image_extent)
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let storage_image = self
-                .device
-                .device
-                .create_image(&storage_image_create_info, None)?;
-
-            let requirements = self
-                .device
-                .device
-                .get_image_memory_requirements(storage_image);
-
-            let storage_image_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing Pipeline Storage Image",
-                requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedImage(storage_image),
-            });
-
-            self.device.device.bind_image_memory(
-                storage_image,
-                storage_image_allocation.memory(),
-                storage_image_allocation.offset(),
-            )?;
-
-            let storage_image_view_info = vk::ImageViewCreateInfo::default()
-                .image(storage_image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-
-            let storage_image_view = self
-                .device
-                .device
-                .create_image_view(&storage_image_view_info, None)?;
-
-            let image_info = vk::DescriptorImageInfo::default()
-                .image_view(storage_image_view)
-                .image_layout(vk::ImageLayout::GENERAL);
-
-            let write_descriptor_set = vk::WriteDescriptorSet::default()
-                .dst_set(self.descriptor_set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .image_info(std::slice::from_ref(&image_info));
-
             self.device
                 .device
                 .update_descriptor_sets(&[write_descriptor_set], &[]);
-
-            self.storage_image = storage_image;
-            self.storage_image_view = storage_image_view;
-            self.storage_image_allocation = storage_image_allocation;
-            self.storage_image_extent = storage_image_extent;
         }
 
+        let old_storage_image = std::mem::replace(&mut self.storage_image, new_storage_image);
+        self.device.destroy_storage_image(old_storage_image);
         Ok(())
     }
 }
@@ -399,13 +328,9 @@ impl RayTracingPipeline {
 impl Drop for RayTracingPipeline {
     fn drop(&mut self) {
         unsafe {
-            self.device
-                .device
-                .destroy_image_view(self.storage_image_view, None);
-            self.device.device.destroy_image(self.storage_image, None);
-            self.device
-                .free(std::mem::take(&mut self.storage_image_allocation));
             self.shader_binding_table.destroy(&self.device);
+            self.device
+                .destroy_storage_image(std::mem::take(&mut self.storage_image));
             self.device.device.destroy_pipeline(self.pipeline, None);
             self.device
                 .device
@@ -525,7 +450,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
         Ok(self)
     }
 
-    pub fn build(self, width: u32, height: u32) -> Result<RayTracingPipeline> {
+    pub fn build(self, extent: vk::Extent2D) -> Result<RayTracingPipeline> {
         unsafe {
             let descriptor_set_layout_bindings = [
                 vk::DescriptorSetLayoutBinding::default()
@@ -594,63 +519,10 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                     .destroy_shader_module(shader_module, None);
             }
 
-            let storage_image_extent = vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            };
-
-            let storage_image_create_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .extent(storage_image_extent)
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
             let storage_image = self
                 .device
-                .device
-                .create_image(&storage_image_create_info, None)?;
+                .create_storage_image(extent, vk::Format::R8G8B8A8_UNORM)?;
 
-            let requirements = self
-                .device
-                .device
-                .get_image_memory_requirements(storage_image);
-
-            let storage_image_allocation = self.device.allocate(&AllocationCreateDesc {
-                name: "Ray Tracing Pipeline Storage Image",
-                requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedImage(storage_image),
-            });
-
-            self.device.device.bind_image_memory(
-                storage_image,
-                storage_image_allocation.memory(),
-                storage_image_allocation.offset(),
-            )?;
-
-            let storage_image_view_info = vk::ImageViewCreateInfo::default()
-                .image(storage_image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                });
-
-            let storage_image_view = self
-                .device
-                .device
-                .create_image_view(&storage_image_view_info, None)?;
             let pool_sizes = descriptor_set_layout_bindings
                 .iter()
                 .map(|binding| {
@@ -681,7 +553,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .map_err(|_| anyhow!("Failed to allocate exactly one descriptor set"))?;
 
             let image_info = vk::DescriptorImageInfo::default()
-                .image_view(storage_image_view)
+                .image_view(storage_image.image_view)
                 .image_layout(vk::ImageLayout::GENERAL);
 
             self.device.device.update_descriptor_sets(
@@ -699,9 +571,6 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 pipeline_layout,
                 shader_binding_table,
                 storage_image,
-                storage_image_view,
-                storage_image_allocation,
-                storage_image_extent,
                 descriptor_set,
             })
         }

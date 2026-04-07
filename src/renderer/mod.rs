@@ -3,6 +3,7 @@ mod device;
 pub mod egui_renderer;
 pub mod ray_tracing;
 mod schedule;
+mod storage_image;
 mod swapchain;
 
 use anyhow::{Result, anyhow};
