@@ -1,4 +1,5 @@
 pub mod acceleration_structure;
+mod buffer;
 mod device;
 pub mod egui_renderer;
 pub mod ray_tracing;

@@ -6,13 +6,11 @@ use bevy::{
     mesh::{Indices, VertexAttributeValues},
     prelude::*,
 };
-use gpu_allocator::{
-    MemoryLocation,
-    vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
-};
+use gpu_allocator::MemoryLocation;
 
 use super::{
     Device, Renderer,
+    buffer::Buffer,
     schedule::{Render, RenderStartup},
 };
 
@@ -148,13 +146,10 @@ impl Drop for AccelerationStructureManager {
 #[derive(Resource)]
 pub struct Blas {
     acceleration_structure: vk::AccelerationStructureKHR,
-    buffer: vk::Buffer,
-    allocation: Allocation,
+    buffer: Buffer,
     device_address: vk::DeviceAddress,
-    vertex_buffer: vk::Buffer,
-    vertex_allocation: Allocation,
-    index_buffer: vk::Buffer,
-    index_allocation: Allocation,
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
 }
 
 pub struct BlasInstance<'a> {
@@ -165,10 +160,8 @@ pub struct BlasInstance<'a> {
 #[derive(Resource)]
 pub struct Tlas {
     acceleration_structure: vk::AccelerationStructureKHR,
-    buffer: vk::Buffer,
-    allocation: Allocation,
-    instance_buffer: vk::Buffer,
-    instance_allocation: Allocation,
+    buffer: Buffer,
+    instance_buffer: Buffer,
 }
 
 impl Tlas {
@@ -180,83 +173,32 @@ impl Tlas {
 impl Device {
     pub fn create_blas(&self, vertices: &[[f32; 3]], indices: &[u32]) -> Result<Blas> {
         unsafe {
-            let vertex_buffer_size = size_of_val(vertices) as u64;
-            let vertex_buffer = self.device.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(vertex_buffer_size)
-                    .usage(
-                        vk::BufferUsageFlags::VERTEX_BUFFER
-                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                    )
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                None,
+            let mut vertex_buffer = self.create_buffer(
+                size_of_val(vertices) as u64,
+                vk::BufferUsageFlags::VERTEX_BUFFER
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                MemoryLocation::CpuToGpu,
             )?;
 
-            let vertex_requirements = self.device.get_buffer_memory_requirements(vertex_buffer);
-
-            let mut vertex_allocation = self.allocate(&AllocationCreateDesc {
-                name: "BLAS Vertex Buffer",
-                requirements: vertex_requirements,
-                location: MemoryLocation::CpuToGpu,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(vertex_buffer),
-            });
-
-            self.device.bind_buffer_memory(
-                vertex_buffer,
-                vertex_allocation.memory(),
-                vertex_allocation.offset(),
-            )?;
-
-            let vertex_slice = vertex_allocation
-                .mapped_slice_mut()
-                .ok_or_else(|| anyhow!("Buffer is not host visible"))?;
-            vertex_slice[..vertex_buffer_size as usize]
+            vertex_buffer
+                .slice_mut()?
                 .copy_from_slice(bytemuck::cast_slice(vertices));
 
-            let index_buffer_size = size_of_val(indices) as u64;
-            let index_buffer = self.device.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(index_buffer_size)
-                    .usage(
-                        vk::BufferUsageFlags::INDEX_BUFFER
-                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                    )
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                None,
+            let mut index_buffer = self.create_buffer(
+                size_of_val(indices) as u64,
+                vk::BufferUsageFlags::INDEX_BUFFER
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                MemoryLocation::CpuToGpu,
             )?;
 
-            let index_requirements = self.device.get_buffer_memory_requirements(index_buffer);
-
-            let mut index_allocation = self.allocate(&AllocationCreateDesc {
-                name: "BLAS Index Buffer",
-                requirements: index_requirements,
-                location: MemoryLocation::CpuToGpu,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(index_buffer),
-            });
-
-            self.device.bind_buffer_memory(
-                index_buffer,
-                index_allocation.memory(),
-                index_allocation.offset(),
-            )?;
-
-            let index_slice = index_allocation
-                .mapped_slice_mut()
-                .ok_or_else(|| anyhow!("Buffer is not host visible"))?;
-            index_slice[..index_buffer_size as usize]
+            index_buffer
+                .slice_mut()?
                 .copy_from_slice(bytemuck::cast_slice(indices));
 
-            let vertex_buffer_address = self.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(vertex_buffer),
-            );
-
-            let index_buffer_address = self.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(index_buffer),
-            );
+            let vertex_buffer_address = self.get_buffer_device_address(&vertex_buffer);
+            let index_buffer_address = self.get_buffer_device_address(&index_buffer);
 
             let geometry = vk::AccelerationStructureGeometryKHR::default()
                 .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
@@ -292,69 +234,31 @@ impl Device {
                     &mut size_info,
                 );
 
-            let buffer = self.device.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(size_info.acceleration_structure_size)
-                    .usage(
-                        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
-                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                    )
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                None,
+            let buffer = self.create_buffer(
+                size_info.acceleration_structure_size,
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                MemoryLocation::GpuOnly,
             )?;
-
-            let requirements = self.device.get_buffer_memory_requirements(buffer);
-            let allocation = self.allocate(&AllocationCreateDesc {
-                name: "BLAS",
-                requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(buffer),
-            });
-
-            self.device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
 
             let acceleration_structure = self
                 .acceleration_structure_device
                 .create_acceleration_structure(
                     &vk::AccelerationStructureCreateInfoKHR::default()
-                        .buffer(buffer)
+                        .buffer(buffer.buffer)
                         .offset(0)
-                        .size(size_info.acceleration_structure_size)
+                        .size(buffer.size)
                         .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL),
                     None,
                 )?;
 
-            let scratch_buffer = self.device.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(size_info.build_scratch_size)
-                    .usage(
-                        vk::BufferUsageFlags::STORAGE_BUFFER
-                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                    )
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                None,
+            let scratch_buffer = self.create_buffer(
+                size_info.build_scratch_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                MemoryLocation::GpuOnly,
             )?;
 
-            let scratch_requirements = self.device.get_buffer_memory_requirements(scratch_buffer);
-            let scratch_allocation = self.allocate(&AllocationCreateDesc {
-                name: "BLAS Scratch Buffer",
-                requirements: scratch_requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(scratch_buffer),
-            });
-
-            self.device.bind_buffer_memory(
-                scratch_buffer,
-                scratch_allocation.memory(),
-                scratch_allocation.offset(),
-            )?;
-
-            let scratch_address = self.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(scratch_buffer),
-            );
+            let scratch_address = self.get_buffer_device_address(&scratch_buffer);
 
             let build_info = build_info
                 .dst_acceleration_structure(acceleration_structure)
@@ -424,8 +328,7 @@ impl Device {
 
             self.device.queue_wait_idle(self.queue)?;
             self.device.destroy_command_pool(command_pool, None);
-            self.device.destroy_buffer(scratch_buffer, None);
-            self.free(scratch_allocation);
+            self.destroy_buffer(scratch_buffer);
 
             let device_address = self
                 .acceleration_structure_device
@@ -437,12 +340,9 @@ impl Device {
             Ok(Blas {
                 acceleration_structure,
                 buffer,
-                allocation,
                 device_address,
                 vertex_buffer,
-                vertex_allocation,
                 index_buffer,
-                index_allocation,
             })
         }
     }
@@ -451,12 +351,9 @@ impl Device {
         unsafe {
             self.acceleration_structure_device
                 .destroy_acceleration_structure(blas.acceleration_structure, None);
-            self.device.destroy_buffer(blas.buffer, None);
-            self.free(blas.allocation);
-            self.device.destroy_buffer(blas.index_buffer, None);
-            self.free(blas.index_allocation);
-            self.device.destroy_buffer(blas.vertex_buffer, None);
-            self.free(blas.vertex_allocation);
+            self.destroy_buffer(blas.buffer);
+            self.destroy_buffer(blas.index_buffer);
+            self.destroy_buffer(blas.vertex_buffer);
         }
     }
 }
@@ -498,49 +395,22 @@ impl Device {
 
             let instance_count = instances.len() as u32;
             let instance_buffer_size =
-                (instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>()) as u64;
+                instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>();
 
-            let instance_buffer = self.device.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(instance_buffer_size)
-                    .usage(
-                        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                    )
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                None,
+            let mut instance_buffer = self.create_buffer(
+                instance_buffer_size as u64,
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                MemoryLocation::CpuToGpu,
             )?;
-
-            let instance_requirements = self.device.get_buffer_memory_requirements(instance_buffer);
-
-            let mut instance_allocation = self.allocate(&AllocationCreateDesc {
-                name: "TLAS Instance Buffer",
-                requirements: instance_requirements,
-                location: MemoryLocation::CpuToGpu,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(instance_buffer),
-            });
-
-            self.device.bind_buffer_memory(
-                instance_buffer,
-                instance_allocation.memory(),
-                instance_allocation.offset(),
-            )?;
-
-            let instance_slice = instance_allocation
-                .mapped_slice_mut()
-                .ok_or_else(|| anyhow!("Instance buffer is not mapped"))?;
 
             // Safety: AccelerationStructureInstanceKHR is repr(C)
-            let instance_bytes = std::slice::from_raw_parts(
-                instances.as_ptr().cast::<u8>(),
-                instance_buffer_size as usize,
-            );
-            instance_slice[..instance_buffer_size as usize].copy_from_slice(instance_bytes);
+            let instance_bytes =
+                std::slice::from_raw_parts(instances.as_ptr().cast::<u8>(), instance_buffer_size);
 
-            let instance_buffer_address = self.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(instance_buffer),
-            );
+            instance_buffer.slice_mut()?.copy_from_slice(instance_bytes);
+
+            let instance_buffer_address = self.get_buffer_device_address(&instance_buffer);
 
             let geometry = vk::AccelerationStructureGeometryKHR::default()
                 .geometry_type(vk::GeometryTypeKHR::INSTANCES)
@@ -568,69 +438,31 @@ impl Device {
                     &mut size_info,
                 );
 
-            let buffer = self.device.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(size_info.acceleration_structure_size)
-                    .usage(
-                        vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
-                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                    )
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                None,
+            let buffer = self.create_buffer(
+                size_info.acceleration_structure_size,
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                MemoryLocation::GpuOnly,
             )?;
-
-            let requirements = self.device.get_buffer_memory_requirements(buffer);
-            let allocation = self.allocate(&AllocationCreateDesc {
-                name: "TLAS",
-                requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(buffer),
-            });
-
-            self.device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
 
             let acceleration_structure = self
                 .acceleration_structure_device
                 .create_acceleration_structure(
                     &vk::AccelerationStructureCreateInfoKHR::default()
-                        .buffer(buffer)
+                        .buffer(buffer.buffer)
                         .offset(0)
-                        .size(size_info.acceleration_structure_size)
+                        .size(buffer.size)
                         .ty(vk::AccelerationStructureTypeKHR::TOP_LEVEL),
                     None,
                 )?;
 
-            let scratch_buffer = self.device.create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(size_info.build_scratch_size)
-                    .usage(
-                        vk::BufferUsageFlags::STORAGE_BUFFER
-                            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-                    )
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE),
-                None,
+            let scratch_buffer = self.create_buffer(
+                size_info.build_scratch_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                MemoryLocation::GpuOnly,
             )?;
 
-            let scratch_requirements = self.device.get_buffer_memory_requirements(scratch_buffer);
-            let scratch_allocation = self.allocate(&AllocationCreateDesc {
-                name: "TLAS Scratch Buffer",
-                requirements: scratch_requirements,
-                location: MemoryLocation::GpuOnly,
-                linear: true,
-                allocation_scheme: AllocationScheme::DedicatedBuffer(scratch_buffer),
-            });
-
-            self.device.bind_buffer_memory(
-                scratch_buffer,
-                scratch_allocation.memory(),
-                scratch_allocation.offset(),
-            )?;
-
-            let scratch_address = self.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(scratch_buffer),
-            );
+            let scratch_address = self.get_buffer_device_address(&scratch_buffer);
 
             let build_info = build_info
                 .dst_acceleration_structure(acceleration_structure)
@@ -688,15 +520,12 @@ impl Device {
 
             self.device.queue_wait_idle(self.queue)?;
             self.device.destroy_command_pool(command_pool, None);
-            self.device.destroy_buffer(scratch_buffer, None);
-            self.free(scratch_allocation);
+            self.destroy_buffer(scratch_buffer);
 
             Ok(Tlas {
                 acceleration_structure,
                 buffer,
-                allocation,
                 instance_buffer,
-                instance_allocation,
             })
         }
     }
@@ -705,10 +534,8 @@ impl Device {
         unsafe {
             self.acceleration_structure_device
                 .destroy_acceleration_structure(tlas.acceleration_structure, None);
-            self.device.destroy_buffer(tlas.buffer, None);
-            self.free(tlas.allocation);
-            self.device.destroy_buffer(tlas.instance_buffer, None);
-            self.free(tlas.instance_allocation);
+            self.destroy_buffer(tlas.buffer);
+            self.destroy_buffer(tlas.instance_buffer);
         }
     }
 }

@@ -4,16 +4,14 @@ use anyhow::{Result, anyhow};
 use ash::vk;
 use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
-use gpu_allocator::{
-    MemoryLocation,
-    vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
-};
+use gpu_allocator::MemoryLocation;
 
 use crate::{camera::Camera, shader::Shader};
 
 use super::{
     Device, Renderer,
     acceleration_structure::{AccelerationStructureManager, AccelerationStructurePlugin, Tlas},
+    buffer::Buffer,
     resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderSystems},
     storage_image::StorageImage,
@@ -358,8 +356,7 @@ impl Drop for RayTracingPipeline {
 }
 
 pub struct ShaderBindingTable {
-    buffer: vk::Buffer,
-    allocation: Allocation,
+    buffer: Buffer,
     raygen_region: vk::StridedDeviceAddressRegionKHR,
     miss_region: vk::StridedDeviceAddressRegionKHR,
     hit_region: vk::StridedDeviceAddressRegionKHR,
@@ -368,10 +365,7 @@ pub struct ShaderBindingTable {
 
 impl ShaderBindingTable {
     unsafe fn destroy(&mut self, device: &Device) {
-        unsafe {
-            device.device.destroy_buffer(self.buffer, None);
-            device.free(std::mem::take(&mut self.allocation));
-        }
+        device.destroy_buffer(std::mem::take(&mut self.buffer));
     }
 }
 
@@ -663,37 +657,12 @@ impl<'a> RayTracingPipelineBuilder<'a> {
 
         let sbt_size = hit_region_offset + hit_region_size;
 
-        let sbt_buffer_create_info = vk::BufferCreateInfo::default()
-            .size(sbt_size as u64)
-            .usage(
-                vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            )
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-        let buffer = unsafe {
-            self.device
-                .device
-                .create_buffer(&sbt_buffer_create_info, None)?
-        };
-
-        let requirements = unsafe { self.device.device.get_buffer_memory_requirements(buffer) };
-
-        let mut allocation = self.device.allocate(&AllocationCreateDesc {
-            name: "Ray Tracing Pipeline Shader Binding Table",
-            requirements,
-            location: MemoryLocation::CpuToGpu,
-            linear: true,
-            allocation_scheme: AllocationScheme::DedicatedBuffer(buffer),
-        });
-
-        unsafe {
-            self.device.device.bind_buffer_memory(
-                buffer,
-                allocation.memory(),
-                allocation.offset(),
-            )?;
-        }
+        let mut buffer = self.device.create_buffer(
+            sbt_size as u64,
+            vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            MemoryLocation::CpuToGpu,
+        )?;
 
         let group_count = self.shader_groups.len();
         let shader_handles = unsafe {
@@ -708,11 +677,8 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .map_err(|_| anyhow!("Failed to get shader group handles"))?
         };
 
-        let sbt_data = allocation
-            .mapped_slice_mut()
-            .ok_or_else(|| anyhow!("Shader binding table is not mapped to host memory"))?;
-
-        sbt_data[..sbt_size].fill(0);
+        let sbt_data = buffer.slice_mut()?;
+        sbt_data.fill(0);
 
         for (slot, &group_index) in self.raygen_group_indices.iter().enumerate() {
             let dst = raygen_region_offset + slot * region_stride;
@@ -732,11 +698,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
             sbt_data[dst..][..handle_size].copy_from_slice(&shader_handles[src..][..handle_size]);
         }
 
-        let sbt_address = unsafe {
-            self.device
-                .device
-                .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
-        };
+        let sbt_address = self.device.get_buffer_device_address(&buffer);
 
         let raygen_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(sbt_address + raygen_region_offset as u64)
@@ -757,7 +719,6 @@ impl<'a> RayTracingPipelineBuilder<'a> {
 
         Ok(ShaderBindingTable {
             buffer,
-            allocation,
             raygen_region,
             miss_region,
             hit_region,
