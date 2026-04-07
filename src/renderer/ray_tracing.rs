@@ -310,7 +310,7 @@ impl RayTracingPipeline {
                 .destroy_image_view(self.storage_image_view, None);
 
             self.device
-                .free(std::mem::take(&mut self.storage_image_allocation))?;
+                .free(std::mem::take(&mut self.storage_image_allocation));
 
             self.device.device.destroy_image(self.storage_image, None);
 
@@ -347,7 +347,7 @@ impl RayTracingPipeline {
                 location: MemoryLocation::GpuOnly,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedImage(storage_image),
-            })?;
+            });
 
             self.device.device.bind_image_memory(
                 storage_image,
@@ -404,8 +404,7 @@ impl Drop for RayTracingPipeline {
                 .destroy_image_view(self.storage_image_view, None);
             self.device.device.destroy_image(self.storage_image, None);
             self.device
-                .free(std::mem::take(&mut self.storage_image_allocation))
-                .unwrap();
+                .free(std::mem::take(&mut self.storage_image_allocation));
             self.shader_binding_table.destroy(&self.device);
             self.device.device.destroy_pipeline(self.pipeline, None);
             self.device
@@ -428,7 +427,7 @@ impl ShaderBindingTable {
     unsafe fn destroy(&mut self, device: &Device) {
         unsafe {
             device.device.destroy_buffer(self.buffer, None);
-            device.free(std::mem::take(&mut self.allocation)).unwrap();
+            device.free(std::mem::take(&mut self.allocation));
         }
     }
 }
@@ -628,7 +627,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 location: MemoryLocation::GpuOnly,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedImage(storage_image),
-            })?;
+            });
 
             self.device.device.bind_image_memory(
                 storage_image,
@@ -799,7 +798,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
             location: MemoryLocation::CpuToGpu,
             linear: true,
             allocation_scheme: AllocationScheme::DedicatedBuffer(buffer),
-        })?;
+        });
 
         unsafe {
             self.device.device.bind_buffer_memory(

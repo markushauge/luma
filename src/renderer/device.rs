@@ -243,16 +243,15 @@ impl Device {
         }
     }
 
-    pub fn allocate(&self, desc: &AllocationCreateDesc) -> Result<Allocation> {
+    pub fn allocate(&self, desc: &AllocationCreateDesc) -> Allocation {
         let mut allocator = self.allocator.lock().unwrap();
-        let allocation = allocator.allocate(desc)?;
-        Ok(allocation)
+        let allocation = allocator.allocate(desc).expect("Failed to allocate memory");
+        allocation
     }
 
-    pub fn free(&self, allocation: Allocation) -> Result<()> {
+    pub fn free(&self, allocation: Allocation) {
         let mut allocator = self.allocator.lock().unwrap();
-        allocator.free(allocation)?;
-        Ok(())
+        allocator.free(allocation).expect("Failed to free memory");
     }
 
     pub fn wait_idle(&self) -> Result<()> {

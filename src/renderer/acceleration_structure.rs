@@ -201,7 +201,7 @@ impl Device {
                 location: MemoryLocation::CpuToGpu,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedBuffer(vertex_buffer),
-            })?;
+            });
 
             self.device.bind_buffer_memory(
                 vertex_buffer,
@@ -236,7 +236,7 @@ impl Device {
                 location: MemoryLocation::CpuToGpu,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedBuffer(index_buffer),
-            })?;
+            });
 
             self.device.bind_buffer_memory(
                 index_buffer,
@@ -310,7 +310,7 @@ impl Device {
                 location: MemoryLocation::GpuOnly,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedBuffer(buffer),
-            })?;
+            });
 
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
@@ -344,7 +344,7 @@ impl Device {
                 location: MemoryLocation::GpuOnly,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedBuffer(scratch_buffer),
-            })?;
+            });
 
             self.device.bind_buffer_memory(
                 scratch_buffer,
@@ -425,7 +425,7 @@ impl Device {
             self.device.queue_wait_idle(self.queue)?;
             self.device.destroy_command_pool(command_pool, None);
             self.device.destroy_buffer(scratch_buffer, None);
-            self.free(scratch_allocation)?;
+            self.free(scratch_allocation);
 
             let device_address = self
                 .acceleration_structure_device
@@ -452,11 +452,11 @@ impl Device {
             self.acceleration_structure_device
                 .destroy_acceleration_structure(blas.acceleration_structure, None);
             self.device.destroy_buffer(blas.buffer, None);
-            self.free(blas.allocation).unwrap();
+            self.free(blas.allocation);
             self.device.destroy_buffer(blas.index_buffer, None);
-            self.free(blas.index_allocation).unwrap();
+            self.free(blas.index_allocation);
             self.device.destroy_buffer(blas.vertex_buffer, None);
-            self.free(blas.vertex_allocation).unwrap();
+            self.free(blas.vertex_allocation);
         }
     }
 }
@@ -519,7 +519,7 @@ impl Device {
                 location: MemoryLocation::CpuToGpu,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedBuffer(instance_buffer),
-            })?;
+            });
 
             self.device.bind_buffer_memory(
                 instance_buffer,
@@ -586,7 +586,7 @@ impl Device {
                 location: MemoryLocation::GpuOnly,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedBuffer(buffer),
-            })?;
+            });
 
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
@@ -620,7 +620,7 @@ impl Device {
                 location: MemoryLocation::GpuOnly,
                 linear: true,
                 allocation_scheme: AllocationScheme::DedicatedBuffer(scratch_buffer),
-            })?;
+            });
 
             self.device.bind_buffer_memory(
                 scratch_buffer,
@@ -689,7 +689,7 @@ impl Device {
             self.device.queue_wait_idle(self.queue)?;
             self.device.destroy_command_pool(command_pool, None);
             self.device.destroy_buffer(scratch_buffer, None);
-            self.free(scratch_allocation)?;
+            self.free(scratch_allocation);
 
             Ok(Tlas {
                 acceleration_structure,
@@ -706,9 +706,9 @@ impl Device {
             self.acceleration_structure_device
                 .destroy_acceleration_structure(tlas.acceleration_structure, None);
             self.device.destroy_buffer(tlas.buffer, None);
-            self.free(tlas.allocation).unwrap();
+            self.free(tlas.allocation);
             self.device.destroy_buffer(tlas.instance_buffer, None);
-            self.free(tlas.instance_allocation).unwrap();
+            self.free(tlas.instance_allocation);
         }
     }
 }
