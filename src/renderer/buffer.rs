@@ -22,6 +22,7 @@ impl Device {
         size: u64,
         usage: vk::BufferUsageFlags,
         location: MemoryLocation,
+        name: Option<&str>,
     ) -> Result<Buffer, vk::Result> {
         unsafe {
             let buffer_create_info = vk::BufferCreateInfo::default()
@@ -33,7 +34,7 @@ impl Device {
             let requirements = self.device.get_buffer_memory_requirements(buffer);
 
             let allocation = self.allocate(&AllocationCreateDesc {
-                name: "Buffer",
+                name: name.unwrap_or("Buffer"),
                 requirements,
                 location,
                 linear: true,

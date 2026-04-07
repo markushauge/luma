@@ -22,6 +22,7 @@ impl Device {
         &self,
         extent: vk::Extent2D,
         format: vk::Format,
+        name: Option<&str>,
     ) -> Result<StorageImage> {
         unsafe {
             let image_create_info = vk::ImageCreateInfo::default()
@@ -39,7 +40,7 @@ impl Device {
             let requirements = self.device.get_image_memory_requirements(image);
 
             let allocation = self.allocate(&AllocationCreateDesc {
-                name: "Storage Image",
+                name: name.unwrap_or("Storage Image"),
                 requirements,
                 location: MemoryLocation::GpuOnly,
                 linear: true,

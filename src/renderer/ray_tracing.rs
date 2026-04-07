@@ -314,9 +314,11 @@ impl RayTracingPipeline {
     ) -> Result<()> {
         self.device.wait_idle()?;
 
-        let new_storage_image = self
-            .device
-            .create_storage_image(extent, vk::Format::R8G8B8A8_UNORM)?;
+        let new_storage_image = self.device.create_storage_image(
+            extent,
+            vk::Format::R8G8B8A8_UNORM,
+            Some("Ray Tracing Pipeline Storage Image"),
+        )?;
 
         let image_info = vk::DescriptorImageInfo::default()
             .image_view(new_storage_image.image_view)
@@ -531,9 +533,11 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                     .destroy_shader_module(shader_module, None);
             }
 
-            let storage_image = self
-                .device
-                .create_storage_image(extent, vk::Format::R8G8B8A8_UNORM)?;
+            let storage_image = self.device.create_storage_image(
+                extent,
+                vk::Format::R8G8B8A8_UNORM,
+                Some("Ray Tracing Pipeline Storage Image"),
+            )?;
 
             let pool_sizes = descriptor_set_layout_bindings
                 .iter()
@@ -662,6 +666,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
             vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             MemoryLocation::CpuToGpu,
+            Some("Shader Binding Table Buffer"),
         )?;
 
         let group_count = self.shader_groups.len();

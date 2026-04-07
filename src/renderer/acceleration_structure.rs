@@ -179,6 +179,7 @@ impl Device {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
                 MemoryLocation::CpuToGpu,
+                Some("BLAS Vertex Buffer"),
             )?;
 
             vertex_buffer
@@ -191,6 +192,7 @@ impl Device {
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
                 MemoryLocation::CpuToGpu,
+                Some("BLAS Index Buffer"),
             )?;
 
             index_buffer
@@ -239,6 +241,7 @@ impl Device {
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 MemoryLocation::GpuOnly,
+                Some("BLAS Buffer"),
             )?;
 
             let acceleration_structure = self
@@ -256,6 +259,7 @@ impl Device {
                 size_info.build_scratch_size,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 MemoryLocation::GpuOnly,
+                Some("BLAS Scratch Buffer"),
             )?;
 
             let scratch_address = self.get_buffer_device_address(&scratch_buffer);
@@ -402,6 +406,7 @@ impl Device {
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                     | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
                 MemoryLocation::CpuToGpu,
+                Some("TLAS Instance Buffer"),
             )?;
 
             // Safety: AccelerationStructureInstanceKHR is repr(C)
@@ -443,6 +448,7 @@ impl Device {
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
                     | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 MemoryLocation::GpuOnly,
+                Some("TLAS Buffer"),
             )?;
 
             let acceleration_structure = self
@@ -460,6 +466,7 @@ impl Device {
                 size_info.build_scratch_size,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 MemoryLocation::GpuOnly,
+                Some("TLAS Scratch Buffer"),
             )?;
 
             let scratch_address = self.get_buffer_device_address(&scratch_buffer);
