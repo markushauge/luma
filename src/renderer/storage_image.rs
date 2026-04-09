@@ -50,10 +50,10 @@ impl Device {
             self.device
                 .bind_image_memory(image, allocation.memory(), allocation.offset())?;
 
-            let image_view_info = vk::ImageViewCreateInfo::default()
+            let image_view_create_info = vk::ImageViewCreateInfo::default()
                 .image(image)
                 .view_type(vk::ImageViewType::TYPE_2D)
-                .format(vk::Format::R8G8B8A8_UNORM)
+                .format(format)
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0,
@@ -62,7 +62,9 @@ impl Device {
                     layer_count: 1,
                 });
 
-            let image_view = self.device.create_image_view(&image_view_info, None)?;
+            let image_view = self
+                .device
+                .create_image_view(&image_view_create_info, None)?;
 
             Ok(StorageImage {
                 extent,
