@@ -9,7 +9,9 @@ use bevy::{
 use egui::ViewportId;
 
 use super::{
-    Device, Renderer,
+    Renderer,
+    render_device::RenderDevice,
+    render_queue::RenderQueue,
     schedule::{Render, RenderStartup, RenderSystems},
 };
 
@@ -79,7 +81,7 @@ fn setup(
         None,
     );
 
-    let egui_renderer = EguiRenderer::new(renderer.device.clone(), context.clone())?;
+    let egui_renderer = EguiRenderer::new(renderer.render_device.clone(), context.clone())?;
     commands.insert_resource(EguiContext(context));
     commands.insert_resource(EguiState(state));
     commands.insert_resource(egui_renderer);
@@ -116,6 +118,7 @@ fn begin(
 
 fn end(renderer: Res<Renderer>, mut egui_renderer: ResMut<EguiRenderer>) -> Result<(), BevyError> {
     egui_renderer.end(
+        &renderer.render_queue,
         renderer.command_pool,
         renderer.command_buffer,
         renderer.swapchain.surface_extent,
@@ -126,22 +129,22 @@ fn end(renderer: Res<Renderer>, mut egui_renderer: ResMut<EguiRenderer>) -> Resu
 
 #[derive(Resource)]
 pub struct EguiRenderer {
-    pub device: Device,
+    pub render_device: RenderDevice,
     pub context: egui::Context,
     pub renderer: egui_ash_renderer::Renderer,
     pub textures_to_free: Vec<egui::TextureId>,
 }
 
 impl EguiRenderer {
-    pub fn new(device: Device, context: egui::Context) -> Result<Self> {
+    pub fn new(render_device: RenderDevice, context: egui::Context) -> Result<Self> {
         let dynamic_rendering = egui_ash_renderer::DynamicRendering {
             color_attachment_format: vk::Format::B8G8R8A8_UNORM,
             depth_attachment_format: None,
         };
 
         let renderer = egui_ash_renderer::Renderer::with_gpu_allocator(
-            device.allocator.clone(),
-            device.device.clone(),
+            render_device.allocator.clone(),
+            render_device.device.clone(),
             dynamic_rendering,
             default(),
         )?;
@@ -149,7 +152,7 @@ impl EguiRenderer {
         let textures_to_free = Vec::new();
 
         Ok(Self {
-            device,
+            render_device,
             context,
             renderer,
             textures_to_free,
@@ -168,6 +171,7 @@ impl EguiRenderer {
 
     pub fn end(
         &mut self,
+        render_queue: &RenderQueue,
         command_pool: vk::CommandPool,
         command_buffer: vk::CommandBuffer,
         extent: vk::Extent2D,
@@ -186,7 +190,7 @@ impl EguiRenderer {
 
         if !textures_delta.set.is_empty() {
             self.renderer
-                .set_textures(self.device.queue, command_pool, &textures_delta.set)?;
+                .set_textures(render_queue.queue, command_pool, &textures_delta.set)?;
         }
 
         let clipped_primitives = self.context.tessellate(shapes, pixels_per_point);
@@ -206,7 +210,7 @@ impl EguiRenderer {
             .color_attachments(std::slice::from_ref(&rendering_attachment_info));
 
         unsafe {
-            self.device
+            self.render_device
                 .device
                 .cmd_begin_rendering(command_buffer, &rendering_info);
 
@@ -217,7 +221,7 @@ impl EguiRenderer {
                 &clipped_primitives,
             )?;
 
-            self.device.device.cmd_end_rendering(command_buffer);
+            self.render_device.device.cmd_end_rendering(command_buffer);
         }
 
         Ok(())

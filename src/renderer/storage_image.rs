@@ -5,7 +5,7 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
 };
 
-use super::Device;
+use super::RenderDevice;
 
 #[derive(Default)]
 #[expect(dead_code)]
@@ -17,7 +17,7 @@ pub struct StorageImage {
     pub allocation: Allocation,
 }
 
-impl Device {
+impl RenderDevice {
     pub fn create_storage_image(
         &self,
         extent: vk::Extent2D,

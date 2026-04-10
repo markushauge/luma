@@ -9,28 +9,28 @@ use ash::{khr, vk};
 use bevy::{prelude::*, window::RawHandleWrapper};
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 
+use super::render_queue::RenderQueue;
+
 #[derive(Clone, Deref)]
-pub struct Device(Arc<DeviceInner>);
+pub struct RenderDevice(Arc<RenderDeviceInner>);
 
 #[expect(dead_code)]
-pub struct DeviceInner {
+pub struct RenderDeviceInner {
     pub entry: ash::Entry,
     pub instance: ash::Instance,
     pub surface_instance: khr::surface::Instance,
     pub physical_device: vk::PhysicalDevice,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
-    pub queue_family_index: u32,
     pub device: ash::Device,
     pub swapchain_device: khr::swapchain::Device,
     pub ray_tracing_pipeline_device: khr::ray_tracing_pipeline::Device,
     pub acceleration_structure_device: khr::acceleration_structure::Device,
     pub deferred_host_operations_device: khr::deferred_host_operations::Device,
-    pub queue: vk::Queue,
     pub allocator: Arc<Mutex<Allocator>>,
 }
 
-impl Device {
-    pub fn new(handle: &RawHandleWrapper) -> Result<Self> {
+impl RenderDevice {
+    pub fn new(handle: &RawHandleWrapper) -> Result<(Self, RenderQueue)> {
         unsafe {
             let entry = ash::Entry::load()?;
             let application_info = vk::ApplicationInfo::default().api_version(Self::api_version());
@@ -135,7 +135,6 @@ impl Device {
                 khr::acceleration_structure::Device::new(&instance, &device);
             let deferred_host_operations_device =
                 khr::deferred_host_operations::Device::new(&instance, &device);
-            let queue = device.get_device_queue(queue_family_index, 0);
 
             let allocater_create_desc = AllocatorCreateDesc {
                 instance: instance.clone(),
@@ -148,23 +147,22 @@ impl Device {
 
             let allocator = Arc::new(Mutex::new(Allocator::new(&allocater_create_desc)?));
 
-            let inner = DeviceInner {
+            let render_device = Self(Arc::new(RenderDeviceInner {
                 entry,
                 instance,
                 surface_instance,
                 physical_device,
                 device_memory_properties,
-                queue_family_index,
                 device,
                 swapchain_device,
                 ray_tracing_pipeline_device,
                 acceleration_structure_device,
                 deferred_host_operations_device,
-                queue,
                 allocator,
-            };
+            }));
 
-            Ok(Self(Arc::new(inner)))
+            let render_queue = RenderQueue::new(render_device.clone(), queue_family_index, 0);
+            Ok((render_device, render_queue))
         }
     }
 
@@ -191,6 +189,7 @@ impl Device {
 
     pub fn end_frame(
         &self,
+        render_queue: &RenderQueue,
         command_buffer: vk::CommandBuffer,
         wait_semaphore: vk::Semaphore,
         signal_semaphore: vk::Semaphore,
@@ -198,18 +197,10 @@ impl Device {
     ) -> Result<()> {
         unsafe {
             self.device.end_command_buffer(command_buffer)?;
-
-            let submit_info = vk::SubmitInfo::default()
-                .wait_dst_stage_mask(&[vk::PipelineStageFlags::ALL_COMMANDS])
-                .command_buffers(std::slice::from_ref(&command_buffer))
-                .wait_semaphores(std::slice::from_ref(&wait_semaphore))
-                .signal_semaphores(std::slice::from_ref(&signal_semaphore));
-
-            self.device
-                .queue_submit(self.queue, &[submit_info], fence)?;
-
-            Ok(())
+            render_queue.submit(command_buffer, wait_semaphore, signal_semaphore, fence)?;
         }
+
+        Ok(())
     }
 
     pub fn allocate(&self, desc: &AllocationCreateDesc) -> Allocation {

@@ -1,8 +1,9 @@
 pub mod acceleration_structure;
 mod buffer;
-mod device;
 pub mod egui_renderer;
 pub mod ray_tracing;
+mod render_device;
+mod render_queue;
 mod resource_state_tracker;
 mod schedule;
 mod storage_image;
@@ -14,15 +15,13 @@ use bevy::{
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
 };
+use render_device::RenderDevice;
+use render_queue::RenderQueue;
 use resource_state_tracker::{ImageState, ResourceStateTracker};
+use schedule::{Render, RenderStartup, run_render_startup_schedule};
+use swapchain::Swapchain;
 
 use crate::shader::ShaderPlugin;
-
-use self::{
-    device::Device,
-    schedule::{Render, RenderStartup, run_render_startup_schedule},
-    swapchain::Swapchain,
-};
 
 pub struct RendererPlugin;
 
@@ -89,7 +88,8 @@ fn render(world: &mut World) -> Result<(), BevyError> {
 #[derive(Resource)]
 pub struct Renderer {
     handle: RawHandleWrapper,
-    device: Device,
+    render_device: RenderDevice,
+    render_queue: RenderQueue,
     swapchain: Swapchain,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
@@ -100,15 +100,23 @@ pub struct Renderer {
 
 impl Renderer {
     pub fn new(handle: RawHandleWrapper, width: u32, height: u32) -> Result<Self> {
-        let device = Device::new(&handle)?;
-        let swapchain = Swapchain::new(device.clone(), &handle, width, height, None)?;
+        let (render_device, render_queue) = RenderDevice::new(&handle)?;
+
+        let swapchain = Swapchain::new(
+            render_device.clone(),
+            &render_queue,
+            &handle,
+            width,
+            height,
+            None,
+        )?;
 
         let command_pool = unsafe {
             let command_pool_create_info = vk::CommandPoolCreateInfo::default()
                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-                .queue_family_index(device.queue_family_index);
+                .queue_family_index(render_queue.queue_family_index);
 
-            device
+            render_device
                 .device
                 .create_command_pool(&command_pool_create_info, None)?
         };
@@ -119,7 +127,7 @@ impl Renderer {
                 .command_pool(command_pool)
                 .level(vk::CommandBufferLevel::PRIMARY);
 
-            device
+            render_device
                 .device
                 .allocate_command_buffers(&command_buffer_allocate_info)?
                 .try_into()
@@ -129,7 +137,7 @@ impl Renderer {
         let semaphore = unsafe {
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
 
-            device
+            render_device
                 .device
                 .create_semaphore(&semaphore_create_info, None)?
         };
@@ -138,14 +146,17 @@ impl Renderer {
             let fence_create_info =
                 vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-            device.device.create_fence(&fence_create_info, None)?
+            render_device
+                .device
+                .create_fence(&fence_create_info, None)?
         };
 
         let tracker = ResourceStateTracker::new();
 
         Ok(Self {
             handle,
-            device,
+            render_device,
+            render_queue,
             swapchain,
             command_pool,
             command_buffer,
@@ -156,7 +167,9 @@ impl Renderer {
     }
 
     pub fn begin(&mut self) -> Result<()> {
-        self.device.begin_frame(self.command_buffer, self.fence)?;
+        self.render_device
+            .begin_frame(self.command_buffer, self.fence)?;
+
         self.swapchain.acquire_next(self.semaphore)?;
 
         if self.swapchain.out_of_date {
@@ -175,7 +188,7 @@ impl Renderer {
                     stages: vk::PipelineStageFlags2::TRANSFER,
                 },
             )
-            .flush(&self.device, self.command_buffer);
+            .flush(&self.render_device, self.command_buffer);
 
         Ok(())
     }
@@ -192,28 +205,31 @@ impl Renderer {
                     stages: vk::PipelineStageFlags2::empty(),
                 },
             )
-            .flush(&self.device, self.command_buffer);
+            .flush(&self.render_device, self.command_buffer);
 
-        self.device.end_frame(
+        self.render_device.end_frame(
+            &self.render_queue,
             self.command_buffer,
             self.semaphore,
             present_image.semaphore,
             self.fence,
         )?;
 
-        self.swapchain.present()?;
+        self.swapchain.present(&self.render_queue)?;
+
         Ok(())
     }
 
     pub fn recreate_swapchain(&mut self, width: u32, height: u32) -> Result<()> {
-        self.device.wait_idle()?;
+        self.render_device.wait_idle()?;
 
         for present_image in &self.swapchain.present_images {
             self.tracker.untrack_image(present_image.image);
         }
 
         self.swapchain = Swapchain::new(
-            self.device.clone(),
+            self.render_device.clone(),
+            &self.render_queue,
             &self.handle,
             width,
             height,
@@ -226,6 +242,6 @@ impl Renderer {
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        self.device.wait_idle().unwrap();
+        self.render_device.wait_idle().unwrap();
     }
 }

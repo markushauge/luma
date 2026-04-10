@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ash::vk;
 
-use super::device::Device;
+use super::render_device::RenderDevice;
 
 pub struct ResourceStateTracker {
     images: HashMap<vk::Image, ImageState>,
@@ -56,7 +56,7 @@ impl ResourceStateTracker {
         self
     }
 
-    pub fn flush(&mut self, device: &Device, command_buffer: vk::CommandBuffer) -> &mut Self {
+    pub fn flush(&mut self, device: &RenderDevice, command_buffer: vk::CommandBuffer) -> &mut Self {
         if self.image_barriers.is_empty() {
             return self;
         }
