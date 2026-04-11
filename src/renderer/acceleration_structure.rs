@@ -9,7 +9,6 @@ use bevy::{
 use gpu_allocator::MemoryLocation;
 
 use super::{
-    Renderer,
     buffer::Buffer,
     render_device::RenderDevice,
     render_queue::RenderQueue,
@@ -25,14 +24,13 @@ impl Plugin for AccelerationStructurePlugin {
     }
 }
 
-fn create_acceleration_structure_manager(mut commands: Commands, renderer: Res<Renderer>) {
-    commands.insert_resource(AccelerationStructureManager::new(
-        renderer.render_device.clone(),
-    ));
+fn create_acceleration_structure_manager(mut commands: Commands, render_device: Res<RenderDevice>) {
+    commands.insert_resource(AccelerationStructureManager::new(render_device.clone()));
 }
 
 fn build_blases(
-    renderer: Res<Renderer>,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
     mut manager: ResMut<AccelerationStructureManager>,
     meshes: Res<Assets<Mesh>>,
     mut asset_events: MessageReader<AssetEvent<Mesh>>,
@@ -44,9 +42,7 @@ fn build_blases(
                 continue;
             };
 
-            if let Err(err) =
-                manager.insert_mesh(&renderer.render_device, &renderer.render_queue, *id, mesh)
-            {
+            if let Err(err) = manager.insert_mesh(&render_device, &render_queue, *id, mesh) {
                 tracing::error!("{}", err);
                 continue;
             }
@@ -57,7 +53,8 @@ fn build_blases(
 }
 
 fn build_tlas(
-    renderer: Res<Renderer>,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
     mut manager: ResMut<AccelerationStructureManager>,
     query: Query<(&Transform, &Mesh3d)>,
     changed_mesh3d: Query<(), Changed<Mesh3d>>,
@@ -86,10 +83,7 @@ fn build_tlas(
         return;
     }
 
-    let tlas = match renderer
-        .render_device
-        .create_tlas(&renderer.render_queue, &instances)
-    {
+    let tlas = match render_device.create_tlas(&render_queue, &instances) {
         Ok(tlas) => tlas,
         Err(err) => {
             tracing::error!("{}", err);

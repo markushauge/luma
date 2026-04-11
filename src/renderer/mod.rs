@@ -13,6 +13,7 @@ mod swapchain;
 use anyhow::Result;
 use ash::vk;
 use bevy::{
+    ecs::system::{RunSystemError, RunSystemOnce},
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
 };
@@ -36,7 +37,8 @@ impl Plugin for RendererPlugin {
                 Startup,
                 (setup_renderer, run_render_startup_schedule).chain(),
             )
-            .add_systems(Update, (recreate_swapchain, render).chain());
+            .add_systems(Update, (recreate_swapchain, render).chain())
+            .add_systems(Last, on_app_exit);
     }
 }
 
@@ -47,161 +49,148 @@ fn setup_renderer(
     let (window, handle) = windows.single()?;
     let width = window.physical_width();
     let height = window.physical_height();
-    let renderer = Renderer::new(handle.clone(), width, height)?;
-    commands.insert_resource(renderer);
+    let (render_device, render_queue) = RenderDevice::new(&handle)?;
+    let render_context = RenderContext::new(render_device.clone(), &render_queue)?;
+
+    let swapchain = Swapchain::new(
+        render_device.clone(),
+        &render_queue,
+        &handle,
+        width,
+        height,
+        None,
+    )?;
+
+    commands.insert_resource(render_device);
+    commands.insert_resource(render_queue);
+    commands.insert_resource(render_context);
+    commands.insert_resource(swapchain);
+    commands.init_resource::<ResourceStateTracker>();
+
     Ok(())
 }
 
 fn recreate_swapchain(
-    mut renderer: ResMut<Renderer>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    mut swapchain: ResMut<Swapchain>,
+    mut resource_state_tracker: ResMut<ResourceStateTracker>,
+    windows: Query<(&Window, &RawHandleWrapper), With<PrimaryWindow>>,
 ) -> Result<(), BevyError> {
-    if !renderer.swapchain.out_of_date {
+    if !swapchain.out_of_date {
         return Ok(());
     }
 
-    let window = windows.single()?;
+    let (window, handle) = windows.single()?;
     let width = window.physical_width();
     let height = window.physical_height();
-    renderer.recreate_swapchain(width, height)?;
+
+    render_device.wait_idle();
+
+    for swapchain_image in &swapchain.swapchain_images {
+        resource_state_tracker.untrack_image(swapchain_image.image);
+    }
+
+    *swapchain = Swapchain::new(
+        render_device.clone(),
+        &render_queue,
+        &handle,
+        width,
+        height,
+        Some(&mut swapchain),
+    )?;
+
     Ok(())
 }
 
 fn render(world: &mut World) -> Result<(), BevyError> {
-    let mut renderer = world.resource_mut::<Renderer>();
-
-    if !renderer.swapchain.out_of_date {
-        renderer.begin()?;
+    if !is_swapchain_out_of_date(world) {
+        if let Err(RunSystemError::Failed(err)) = world.run_system_once(begin) {
+            return Err(err);
+        };
     }
 
-    if !renderer.swapchain.out_of_date {
+    if !is_swapchain_out_of_date(world) {
         world.run_schedule(Render);
     }
 
-    let mut renderer = world.resource_mut::<Renderer>();
-
-    if !renderer.swapchain.out_of_date {
-        renderer.end()?;
+    if !is_swapchain_out_of_date(world) {
+        if let Err(RunSystemError::Failed(err)) = world.run_system_once(end) {
+            return Err(err);
+        };
     }
 
     Ok(())
 }
 
-#[derive(Resource)]
-pub struct Renderer {
-    handle: RawHandleWrapper,
-    render_device: RenderDevice,
-    render_queue: RenderQueue,
-    swapchain: Swapchain,
-    render_context: RenderContext,
-    tracker: ResourceStateTracker,
+fn is_swapchain_out_of_date(world: &World) -> bool {
+    world.resource::<Swapchain>().out_of_date
 }
 
-impl Renderer {
-    pub fn new(handle: RawHandleWrapper, width: u32, height: u32) -> Result<Self> {
-        let (render_device, render_queue) = RenderDevice::new(&handle)?;
+fn begin(
+    render_device: Res<RenderDevice>,
+    render_context: Res<RenderContext>,
+    mut swapchain: ResMut<Swapchain>,
+    mut resource_state_tracker: ResMut<ResourceStateTracker>,
+) -> Result<()> {
+    render_device.begin_frame(render_context.command_buffer, render_context.fence)?;
+    swapchain.acquire_next(render_context.semaphore)?;
 
-        let swapchain = Swapchain::new(
-            render_device.clone(),
-            &render_queue,
-            &handle,
-            width,
-            height,
-            None,
-        )?;
-
-        let render_context = RenderContext::new(render_device.clone(), &render_queue)?;
-
-        let tracker = ResourceStateTracker::new();
-
-        Ok(Self {
-            handle,
-            render_device,
-            render_queue,
-            swapchain,
-            render_context,
-            tracker,
-        })
+    if swapchain.out_of_date {
+        return Ok(());
     }
 
-    pub fn begin(&mut self) -> Result<()> {
-        self.render_device.begin_frame(
-            self.render_context.command_buffer,
-            self.render_context.fence,
-        )?;
+    let swapchain_image = swapchain.current_image();
 
-        self.swapchain.acquire_next(self.render_context.semaphore)?;
+    resource_state_tracker
+        .track_image(swapchain_image.image)
+        .transition_image(
+            swapchain_image.image,
+            ImageState {
+                layout: vk::ImageLayout::GENERAL,
+                access: vk::AccessFlags2::TRANSFER_WRITE,
+                stages: vk::PipelineStageFlags2::TRANSFER,
+            },
+        )
+        .flush(&render_device, render_context.command_buffer);
 
-        if self.swapchain.out_of_date {
-            return Ok(());
-        }
-
-        let swapchain_image = self.swapchain.current_image();
-
-        self.tracker
-            .track_image(swapchain_image.image)
-            .transition_image(
-                swapchain_image.image,
-                ImageState {
-                    layout: vk::ImageLayout::GENERAL,
-                    access: vk::AccessFlags2::TRANSFER_WRITE,
-                    stages: vk::PipelineStageFlags2::TRANSFER,
-                },
-            )
-            .flush(&self.render_device, self.render_context.command_buffer);
-
-        Ok(())
-    }
-
-    pub fn end(&mut self) -> Result<()> {
-        let swapchain_image = self.swapchain.current_image();
-
-        self.tracker
-            .transition_image(
-                swapchain_image.image,
-                ImageState {
-                    layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                    access: vk::AccessFlags2::empty(),
-                    stages: vk::PipelineStageFlags2::empty(),
-                },
-            )
-            .flush(&self.render_device, self.render_context.command_buffer);
-
-        self.render_device.end_frame(
-            &self.render_queue,
-            self.render_context.command_buffer,
-            self.render_context.semaphore,
-            swapchain_image.semaphore,
-            self.render_context.fence,
-        )?;
-
-        self.swapchain.present(&self.render_queue)?;
-
-        Ok(())
-    }
-
-    pub fn recreate_swapchain(&mut self, width: u32, height: u32) -> Result<()> {
-        self.render_device.wait_idle()?;
-
-        for swapchain_image in &self.swapchain.swapchain_images {
-            self.tracker.untrack_image(swapchain_image.image);
-        }
-
-        self.swapchain = Swapchain::new(
-            self.render_device.clone(),
-            &self.render_queue,
-            &self.handle,
-            width,
-            height,
-            Some(&mut self.swapchain),
-        )?;
-
-        Ok(())
-    }
+    Ok(())
 }
 
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        self.render_device.wait_idle().unwrap();
+fn end(
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    render_context: Res<RenderContext>,
+    mut swapchain: ResMut<Swapchain>,
+    mut resource_state_tracker: ResMut<ResourceStateTracker>,
+) -> Result<()> {
+    let swapchain_image = swapchain.current_image();
+
+    resource_state_tracker
+        .transition_image(
+            swapchain_image.image,
+            ImageState {
+                layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                access: vk::AccessFlags2::empty(),
+                stages: vk::PipelineStageFlags2::empty(),
+            },
+        )
+        .flush(&render_device, render_context.command_buffer);
+
+    render_device.end_frame(
+        &render_queue,
+        render_context.command_buffer,
+        render_context.semaphore,
+        swapchain_image.semaphore,
+        render_context.fence,
+    )?;
+
+    swapchain.present(&render_queue)?;
+    Ok(())
+}
+
+fn on_app_exit(mut app_exit_events: MessageReader<AppExit>, render_device: Res<RenderDevice>) {
+    if let Some(_) = app_exit_events.read().next() {
+        render_device.wait_idle();
     }
 }

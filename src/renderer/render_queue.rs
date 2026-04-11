@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use super::render_device::RenderDevice;
 
+#[derive(Resource)]
 #[expect(dead_code)]
 pub struct RenderQueue {
     pub render_device: RenderDevice,

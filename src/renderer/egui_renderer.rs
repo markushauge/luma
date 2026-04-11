@@ -9,10 +9,11 @@ use bevy::{
 use egui::ViewportId;
 
 use super::{
-    Renderer,
+    render_context::RenderContext,
     render_device::RenderDevice,
     render_queue::RenderQueue,
     schedule::{Render, RenderStartup, RenderSystems},
+    swapchain::Swapchain,
 };
 
 pub struct EguiPlugin;
@@ -68,7 +69,7 @@ pub struct EguiContext(egui::Context);
 fn setup(
     mut commands: Commands,
     display_handle: Res<DisplayHandleWrapper>,
-    renderer: Res<Renderer>,
+    render_device: Res<RenderDevice>,
 ) -> Result<(), BevyError> {
     let context = egui::Context::default();
 
@@ -81,7 +82,7 @@ fn setup(
         None,
     );
 
-    let egui_renderer = EguiRenderer::new(renderer.render_device.clone(), context.clone())?;
+    let egui_renderer = EguiRenderer::new(render_device.clone(), context.clone())?;
     commands.insert_resource(EguiContext(context));
     commands.insert_resource(EguiState(state));
     commands.insert_resource(egui_renderer);
@@ -116,13 +117,18 @@ fn begin(
     Ok(())
 }
 
-fn end(renderer: Res<Renderer>, mut egui_renderer: ResMut<EguiRenderer>) -> Result<(), BevyError> {
+fn end(
+    render_queue: Res<RenderQueue>,
+    render_context: Res<RenderContext>,
+    swapchain: Res<Swapchain>,
+    mut egui_renderer: ResMut<EguiRenderer>,
+) -> Result<(), BevyError> {
     egui_renderer.end(
-        &renderer.render_queue,
-        renderer.render_context.command_pool,
-        renderer.render_context.command_buffer,
-        renderer.swapchain.surface_extent,
-        renderer.swapchain.current_image().image_view,
+        &render_queue,
+        render_context.command_pool,
+        render_context.command_buffer,
+        swapchain.surface_extent,
+        swapchain.current_image().image_view,
     )?;
     Ok(())
 }

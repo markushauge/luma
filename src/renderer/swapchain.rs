@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use ash::vk;
-use bevy::window::RawHandleWrapper;
+use bevy::{prelude::*, window::RawHandleWrapper};
 
 use super::{RenderDevice, render_queue::RenderQueue};
 
@@ -10,6 +10,7 @@ pub struct SwapchainImage {
     pub semaphore: vk::Semaphore,
 }
 
+#[derive(Resource)]
 pub struct Swapchain {
     pub render_device: RenderDevice,
     pub surface: vk::SurfaceKHR,
@@ -211,8 +212,6 @@ impl Swapchain {
 
 impl Drop for Swapchain {
     fn drop(&mut self) {
-        self.render_device.wait_idle().unwrap();
-
         unsafe {
             for swapchain_image in self.swapchain_images.drain(..) {
                 self.render_device

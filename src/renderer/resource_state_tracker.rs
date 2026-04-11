@@ -1,22 +1,17 @@
 use std::collections::HashMap;
 
 use ash::vk;
+use bevy::prelude::*;
 
 use super::render_device::RenderDevice;
 
+#[derive(Resource, Default)]
 pub struct ResourceStateTracker {
     images: HashMap<vk::Image, ImageState>,
     image_barriers: Vec<vk::ImageMemoryBarrier2<'static>>,
 }
 
 impl ResourceStateTracker {
-    pub fn new() -> Self {
-        Self {
-            images: HashMap::new(),
-            image_barriers: Vec::new(),
-        }
-    }
-
     pub fn track_image(&mut self, image: vk::Image) -> &mut Self {
         self.images.insert(image, ImageState::default());
         self

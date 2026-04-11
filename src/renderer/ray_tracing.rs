@@ -7,12 +7,14 @@ use gpu_allocator::MemoryLocation;
 use crate::{camera::Camera, shader::Shader};
 
 use super::{
-    RenderDevice, Renderer,
+    RenderDevice,
     acceleration_structure::{AccelerationStructureManager, AccelerationStructurePlugin, Tlas},
     buffer::Buffer,
+    render_context::RenderContext,
     resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderSystems},
     storage_image::StorageImage,
+    swapchain::Swapchain,
 };
 
 #[derive(Default)]
@@ -67,7 +69,9 @@ fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 fn create_or_update_ray_tracing_pipeline(
     mut commands: Commands,
-    mut renderer: ResMut<Renderer>,
+    render_device: Res<RenderDevice>,
+    swapchain: Res<Swapchain>,
+    mut resource_state_tracker: ResMut<ResourceStateTracker>,
     ray_tracing_pipeline: Option<ResMut<RayTracingPipeline>>,
     settings: Res<RayTracingSettings>,
     ray_tracing_shaders: Res<RayTracingShaders>,
@@ -85,7 +89,7 @@ fn create_or_update_ray_tracing_pipeline(
         return Ok(());
     };
 
-    let vk::Extent2D { width, height } = renderer.swapchain.surface_extent;
+    let vk::Extent2D { width, height } = swapchain.surface_extent;
 
     let extent = vk::Extent2D {
         width: (width as f32 * settings.resolution_scaling) as u32,
@@ -95,7 +99,7 @@ fn create_or_update_ray_tracing_pipeline(
     match ray_tracing_pipeline {
         None => {
             commands.insert_resource(
-                RayTracingPipeline::builder(renderer.render_device.clone())
+                RayTracingPipeline::builder(render_device.clone())
                     .with_raygen_shader_group(raygen_shader)?
                     .with_miss_shader_group(miss_shader)?
                     .with_hit_shader_group(closest_hit_shader, None, None)?
@@ -104,7 +108,7 @@ fn create_or_update_ray_tracing_pipeline(
         }
         Some(mut ray_tracing_pipeline) => {
             if ray_tracing_pipeline.storage_image.extent != extent {
-                ray_tracing_pipeline.recreate_storage_image(extent, &mut renderer.tracker)?;
+                ray_tracing_pipeline.recreate_storage_image(extent, &mut resource_state_tracker)?;
             }
         }
     }
@@ -113,7 +117,9 @@ fn create_or_update_ray_tracing_pipeline(
 }
 
 fn execute_ray_tracing_pipeline(
-    mut renderer: ResMut<Renderer>,
+    swapchain: Res<Swapchain>,
+    render_context: Res<RenderContext>,
+    mut resource_state_tracker: ResMut<ResourceStateTracker>,
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
     acceleration_structure_manager: Res<AccelerationStructureManager>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
@@ -129,14 +135,9 @@ fn execute_ray_tracing_pipeline(
 
     let (camera, camera_transform) = camera.single()?;
 
-    let command_buffer = renderer.render_context.command_buffer;
-    let swapchain_image = renderer.swapchain.current_image().image;
-    let swapchain_image_extent = renderer.swapchain.surface_extent;
-    let tracker = &mut renderer.tracker;
-
     ray_tracing_pipeline.trace_rays(
-        command_buffer,
-        tracker,
+        render_context.command_buffer,
+        &mut resource_state_tracker,
         tlas,
         camera_transform,
         camera.vertical_fov(),
@@ -144,10 +145,10 @@ fn execute_ray_tracing_pipeline(
     );
 
     ray_tracing_pipeline.blit(
-        command_buffer,
-        tracker,
-        swapchain_image,
-        swapchain_image_extent,
+        render_context.command_buffer,
+        &mut resource_state_tracker,
+        swapchain.current_image().image,
+        swapchain.surface_extent,
     );
 
     Ok(())
@@ -317,7 +318,7 @@ impl RayTracingPipeline {
         extent: vk::Extent2D,
         tracker: &mut ResourceStateTracker,
     ) -> Result<()> {
-        self.render_device.wait_idle()?;
+        self.render_device.wait_idle();
 
         let new_storage_image = self.render_device.create_storage_image(
             extent,

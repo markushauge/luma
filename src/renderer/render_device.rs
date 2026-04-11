@@ -11,7 +11,7 @@ use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, Allocat
 
 use super::render_queue::RenderQueue;
 
-#[derive(Clone, Deref)]
+#[derive(Resource, Clone, Deref)]
 pub struct RenderDevice(Arc<RenderDeviceInner>);
 
 #[expect(dead_code)]
@@ -214,8 +214,12 @@ impl RenderDevice {
         allocator.free(allocation).expect("Failed to free memory");
     }
 
-    pub fn wait_idle(&self) -> Result<()> {
-        unsafe { self.device.device_wait_idle().map_err(Into::into) }
+    pub fn wait_idle(&self) {
+        unsafe {
+            self.device
+                .device_wait_idle()
+                .expect("Failed while waiting for device to become idle");
+        }
     }
 
     pub fn get_physical_device_ray_tracing_pipeline_properties(

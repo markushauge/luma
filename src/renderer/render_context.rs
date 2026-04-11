@@ -1,8 +1,10 @@
 use anyhow::{Result, anyhow};
 use ash::vk;
+use bevy::prelude::*;
 
 use super::{render_device::RenderDevice, render_queue::RenderQueue};
 
+#[derive(Resource)]
 pub struct RenderContext {
     pub render_device: RenderDevice,
     pub command_pool: vk::CommandPool,
