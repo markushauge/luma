@@ -129,7 +129,7 @@ fn execute_ray_tracing_pipeline(
 
     let (camera, camera_transform) = camera.single()?;
 
-    let command_buffer = renderer.command_buffer;
+    let command_buffer = renderer.render_context.command_buffer;
     let swapchain_image = renderer.swapchain.current_image().image;
     let swapchain_image_extent = renderer.swapchain.surface_extent;
     let tracker = &mut renderer.tracker;

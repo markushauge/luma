@@ -2,6 +2,7 @@ pub mod acceleration_structure;
 mod buffer;
 pub mod egui_renderer;
 pub mod ray_tracing;
+mod render_context;
 mod render_device;
 mod render_queue;
 mod resource_state_tracker;
@@ -9,12 +10,13 @@ mod schedule;
 mod storage_image;
 mod swapchain;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use ash::vk;
 use bevy::{
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
 };
+use render_context::RenderContext;
 use render_device::RenderDevice;
 use render_queue::RenderQueue;
 use resource_state_tracker::{ImageState, ResourceStateTracker};
@@ -91,10 +93,7 @@ pub struct Renderer {
     render_device: RenderDevice,
     render_queue: RenderQueue,
     swapchain: Swapchain,
-    command_pool: vk::CommandPool,
-    command_buffer: vk::CommandBuffer,
-    semaphore: vk::Semaphore,
-    fence: vk::Fence,
+    render_context: RenderContext,
     tracker: ResourceStateTracker,
 }
 
@@ -111,45 +110,7 @@ impl Renderer {
             None,
         )?;
 
-        let command_pool = unsafe {
-            let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-                .queue_family_index(render_queue.queue_family_index);
-
-            render_device
-                .device
-                .create_command_pool(&command_pool_create_info, None)?
-        };
-
-        let [command_buffer] = unsafe {
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(1)
-                .command_pool(command_pool)
-                .level(vk::CommandBufferLevel::PRIMARY);
-
-            render_device
-                .device
-                .allocate_command_buffers(&command_buffer_allocate_info)?
-                .try_into()
-                .map_err(|_| anyhow!("Failed to allocate exactly one command buffer"))?
-        };
-
-        let semaphore = unsafe {
-            let semaphore_create_info = vk::SemaphoreCreateInfo::default();
-
-            render_device
-                .device
-                .create_semaphore(&semaphore_create_info, None)?
-        };
-
-        let fence = unsafe {
-            let fence_create_info =
-                vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
-
-            render_device
-                .device
-                .create_fence(&fence_create_info, None)?
-        };
+        let render_context = RenderContext::new(render_device.clone(), &render_queue)?;
 
         let tracker = ResourceStateTracker::new();
 
@@ -158,19 +119,18 @@ impl Renderer {
             render_device,
             render_queue,
             swapchain,
-            command_pool,
-            command_buffer,
-            semaphore,
-            fence,
+            render_context,
             tracker,
         })
     }
 
     pub fn begin(&mut self) -> Result<()> {
-        self.render_device
-            .begin_frame(self.command_buffer, self.fence)?;
+        self.render_device.begin_frame(
+            self.render_context.command_buffer,
+            self.render_context.fence,
+        )?;
 
-        self.swapchain.acquire_next(self.semaphore)?;
+        self.swapchain.acquire_next(self.render_context.semaphore)?;
 
         if self.swapchain.out_of_date {
             return Ok(());
@@ -188,7 +148,7 @@ impl Renderer {
                     stages: vk::PipelineStageFlags2::TRANSFER,
                 },
             )
-            .flush(&self.render_device, self.command_buffer);
+            .flush(&self.render_device, self.render_context.command_buffer);
 
         Ok(())
     }
@@ -205,14 +165,14 @@ impl Renderer {
                     stages: vk::PipelineStageFlags2::empty(),
                 },
             )
-            .flush(&self.render_device, self.command_buffer);
+            .flush(&self.render_device, self.render_context.command_buffer);
 
         self.render_device.end_frame(
             &self.render_queue,
-            self.command_buffer,
-            self.semaphore,
+            self.render_context.command_buffer,
+            self.render_context.semaphore,
             swapchain_image.semaphore,
-            self.fence,
+            self.render_context.fence,
         )?;
 
         self.swapchain.present(&self.render_queue)?;

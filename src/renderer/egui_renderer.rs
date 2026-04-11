@@ -119,8 +119,8 @@ fn begin(
 fn end(renderer: Res<Renderer>, mut egui_renderer: ResMut<EguiRenderer>) -> Result<(), BevyError> {
     egui_renderer.end(
         &renderer.render_queue,
-        renderer.command_pool,
-        renderer.command_buffer,
+        renderer.render_context.command_pool,
+        renderer.render_context.command_buffer,
         renderer.swapchain.surface_extent,
         renderer.swapchain.current_image().image_view,
     )?;
