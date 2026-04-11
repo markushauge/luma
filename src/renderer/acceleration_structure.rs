@@ -9,69 +9,76 @@ use bevy::{
 use gpu_allocator::MemoryLocation;
 
 use super::{
-    buffer::Buffer,
-    render_device::RenderDevice,
-    render_queue::RenderQueue,
-    schedule::{Render, RenderStartup},
+    buffer::Buffer, render_device::RenderDevice, render_queue::RenderQueue, schedule::Render,
 };
 
 pub struct AccelerationStructurePlugin;
 
 impl Plugin for AccelerationStructurePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(RenderStartup, create_acceleration_structure_manager)
-            .add_systems(Render, (build_blases, build_tlas).chain());
+        app.init_resource::<BlasManager>()
+            .add_systems(Render, build_acceleration_structures);
     }
 }
 
-fn create_acceleration_structure_manager(mut commands: Commands, render_device: Res<RenderDevice>) {
-    commands.insert_resource(AccelerationStructureManager::new(render_device.clone()));
-}
-
-fn build_blases(
+fn build_acceleration_structures(
+    mut commands: Commands,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
-    mut manager: ResMut<AccelerationStructureManager>,
+    mut blas_manager: ResMut<BlasManager>,
+    tlas: Option<ResMut<Tlas>>,
     meshes: Res<Assets<Mesh>>,
     mut asset_events: MessageReader<AssetEvent<Mesh>>,
-) {
+    mesh3ds: Query<(&Transform, &Mesh3d)>,
+    changed_mesh3ds: Query<(), Changed<Mesh3d>>,
+    changed_transforms: Query<(), (Changed<Transform>, With<Mesh3d>)>,
+    removed_mesh3ds: RemovedComponents<Mesh3d>,
+) -> Result<(), BevyError> {
+    let mut build_tlas = tlas.is_none()
+        | !changed_mesh3ds.is_empty()
+        | !changed_transforms.is_empty()
+        | !removed_mesh3ds.is_empty();
+
     for asset_event in asset_events.read() {
-        if let AssetEvent::Added { id } = asset_event {
-            let Some(mesh) = meshes.get(*id) else {
-                tracing::error!("Mesh with ID {} not found in Assets<Mesh>.", id);
-                continue;
-            };
+        match asset_event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => {
+                let Some(mesh) = meshes.get(*id) else {
+                    continue;
+                };
 
-            if let Err(err) = manager.insert_mesh(&render_device, &render_queue, *id, mesh) {
-                tracing::error!("{}", err);
-                continue;
+                let Some(VertexAttributeValues::Float32x3(vertices)) =
+                    mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                else {
+                    tracing::error!("Mesh does not contain [f32; 3] positions.");
+                    continue;
+                };
+
+                let Some(Indices::U32(indices)) = mesh.indices() else {
+                    tracing::error!("Mesh does not contain u32 indices.");
+                    continue;
+                };
+
+                let blas = render_device.create_blas(&render_queue, vertices, indices)?;
+                blas_manager.blases.insert(*id, blas);
+                build_tlas = true;
             }
-
-            manager.tlas_dirty = true;
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                blas_manager.blases.remove(id);
+                build_tlas = true;
+            }
         }
     }
-}
 
-fn build_tlas(
-    render_device: Res<RenderDevice>,
-    render_queue: Res<RenderQueue>,
-    mut manager: ResMut<AccelerationStructureManager>,
-    query: Query<(&Transform, &Mesh3d)>,
-    changed_mesh3d: Query<(), Changed<Mesh3d>>,
-    changed_transform: Query<(), (Changed<Transform>, With<Mesh3d>)>,
-    removed_mesh3d: RemovedComponents<Mesh3d>,
-) {
-    manager.tlas_dirty |=
-        !changed_mesh3d.is_empty() || !changed_transform.is_empty() || !removed_mesh3d.is_empty();
-
-    if !manager.tlas_dirty {
-        return;
+    if !build_tlas {
+        return Ok(());
     }
 
-    let instances: Vec<_> = query
+    let instances: Vec<_> = mesh3ds
         .iter()
         .filter_map(|(transform, Mesh3d(mesh_handle))| {
-            let blas = manager.blases.get(&mesh_handle.id())?;
+            let blas = blas_manager.blases.get(&mesh_handle.id())?;
             Some(BlasInstance {
                 blas,
                 transform: *transform,
@@ -80,82 +87,22 @@ fn build_tlas(
         .collect();
 
     if instances.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let tlas = match render_device.create_tlas(&render_queue, &instances) {
-        Ok(tlas) => tlas,
-        Err(err) => {
-            tracing::error!("{}", err);
-            return;
-        }
-    };
-
-    manager.tlas = Some(tlas);
-    manager.tlas_dirty = false;
+    let tlas = render_device.create_tlas(&render_queue, &instances)?;
+    commands.insert_resource(tlas);
+    Ok(())
 }
 
-#[derive(Resource)]
-pub struct AccelerationStructureManager {
-    render_device: RenderDevice,
+#[derive(Resource, Default)]
+pub struct BlasManager {
     blases: HashMap<AssetId<Mesh>, Blas>,
-    tlas: Option<Tlas>,
-    tlas_dirty: bool,
-}
-
-impl AccelerationStructureManager {
-    fn new(render_device: RenderDevice) -> Self {
-        Self {
-            render_device,
-            blases: HashMap::new(),
-            tlas: None,
-            tlas_dirty: false,
-        }
-    }
-
-    fn insert_mesh(
-        &mut self,
-        render_device: &RenderDevice,
-        render_queue: &RenderQueue,
-        asset_id: AssetId<Mesh>,
-        mesh: &Mesh,
-    ) -> Result<()> {
-        let Some(VertexAttributeValues::Float32x3(vertices)) =
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-        else {
-            anyhow::bail!("Mesh does not contain [f32; 3] positions.");
-        };
-
-        let Some(Indices::U32(indices)) = mesh.indices() else {
-            anyhow::bail!("Mesh does not contain u32 indices.");
-        };
-
-        let blas = render_device.create_blas(render_queue, vertices, indices)?;
-        self.blases.insert(asset_id, blas);
-        Ok(())
-    }
-
-    pub fn tlas(&self) -> Option<&Tlas> {
-        self.tlas.as_ref()
-    }
-}
-
-impl Drop for AccelerationStructureManager {
-    fn drop(&mut self) {
-        unsafe {
-            for (_, blas) in std::mem::take(&mut self.blases) {
-                self.render_device.destroy_blas(blas);
-            }
-
-            if let Some(tlas) = self.tlas.take() {
-                self.render_device.destroy_tlas(tlas);
-            }
-        }
-    }
 }
 
 #[derive(Resource)]
 pub struct Blas {
+    render_device: RenderDevice,
     acceleration_structure: vk::AccelerationStructureKHR,
     buffer: Buffer,
     device_address: vk::DeviceAddress,
@@ -170,6 +117,7 @@ pub struct BlasInstance<'a> {
 
 #[derive(Resource)]
 pub struct Tlas {
+    render_device: RenderDevice,
     acceleration_structure: vk::AccelerationStructureKHR,
     buffer: Buffer,
     instance_buffer: Buffer,
@@ -358,6 +306,7 @@ impl RenderDevice {
                 );
 
             Ok(Blas {
+                render_device: self.clone(),
                 acceleration_structure,
                 buffer,
                 device_address,
@@ -366,14 +315,23 @@ impl RenderDevice {
             })
         }
     }
+}
 
-    pub unsafe fn destroy_blas(&self, blas: Blas) {
+impl Drop for Blas {
+    fn drop(&mut self) {
         unsafe {
-            self.acceleration_structure_device
-                .destroy_acceleration_structure(blas.acceleration_structure, None);
-            self.destroy_buffer(blas.buffer);
-            self.destroy_buffer(blas.index_buffer);
-            self.destroy_buffer(blas.vertex_buffer);
+            self.render_device
+                .acceleration_structure_device
+                .destroy_acceleration_structure(self.acceleration_structure, None);
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.buffer));
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.vertex_buffer));
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.index_buffer));
         }
     }
 }
@@ -550,19 +508,27 @@ impl RenderDevice {
             self.destroy_buffer(scratch_buffer);
 
             Ok(Tlas {
+                render_device: self.clone(),
                 acceleration_structure,
                 buffer,
                 instance_buffer,
             })
         }
     }
+}
 
-    pub unsafe fn destroy_tlas(&self, tlas: Tlas) {
+impl Drop for Tlas {
+    fn drop(&mut self) {
         unsafe {
-            self.acceleration_structure_device
-                .destroy_acceleration_structure(tlas.acceleration_structure, None);
-            self.destroy_buffer(tlas.buffer);
-            self.destroy_buffer(tlas.instance_buffer);
+            self.render_device
+                .acceleration_structure_device
+                .destroy_acceleration_structure(self.acceleration_structure, None);
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.buffer));
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.instance_buffer));
         }
     }
 }
