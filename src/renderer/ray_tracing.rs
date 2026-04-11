@@ -209,8 +209,6 @@ impl RayTracingPipeline {
             .flush(&self.render_device, command_buffer);
 
         let push_constants = PushConstants {
-            viewport_width: self.storage_image.extent.width,
-            viewport_height: self.storage_image.extent.height,
             camera_translation: camera_transform.translation,
             camera_rotation: Mat3::from_quat(camera_transform.rotation),
             camera_fov,
@@ -746,8 +744,6 @@ impl<'a> RayTracingPipelineBuilder<'a> {
 #[repr(C)]
 #[derive(Clone, Copy, Zeroable, Pod)]
 struct PushConstants {
-    viewport_width: u32,
-    viewport_height: u32,
     camera_translation: Vec3,
     camera_rotation: Mat3,
     camera_fov: f32,
