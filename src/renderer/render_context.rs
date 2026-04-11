@@ -63,6 +63,52 @@ impl RenderContext {
             fence,
         })
     }
+
+    pub fn begin_frame(&self, render_device: &RenderDevice) -> Result<()> {
+        unsafe {
+            render_device
+                .device
+                .wait_for_fences(&[self.fence], true, u64::MAX)?;
+
+            render_device.device.reset_fences(&[self.fence])?;
+
+            render_device.device.reset_command_buffer(
+                self.command_buffer,
+                vk::CommandBufferResetFlags::RELEASE_RESOURCES,
+            )?;
+
+            let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+            render_device
+                .device
+                .begin_command_buffer(self.command_buffer, &command_buffer_begin_info)?;
+
+            Ok(())
+        }
+    }
+
+    pub fn end_frame(
+        &self,
+        render_device: &RenderDevice,
+        render_queue: &RenderQueue,
+        signal_semaphore: vk::Semaphore,
+    ) -> Result<()> {
+        unsafe {
+            render_device
+                .device
+                .end_command_buffer(self.command_buffer)?;
+
+            render_queue.submit(
+                self.command_buffer,
+                self.semaphore,
+                signal_semaphore,
+                self.fence,
+            )?;
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for RenderContext {

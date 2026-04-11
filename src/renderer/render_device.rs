@@ -166,43 +166,6 @@ impl RenderDevice {
         }
     }
 
-    pub fn begin_frame(&self, command_buffer: vk::CommandBuffer, fence: vk::Fence) -> Result<()> {
-        unsafe {
-            self.device.wait_for_fences(&[fence], true, u64::MAX)?;
-
-            self.device.reset_fences(&[fence])?;
-
-            self.device.reset_command_buffer(
-                command_buffer,
-                vk::CommandBufferResetFlags::RELEASE_RESOURCES,
-            )?;
-
-            let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-            self.device
-                .begin_command_buffer(command_buffer, &command_buffer_begin_info)?;
-
-            Ok(())
-        }
-    }
-
-    pub fn end_frame(
-        &self,
-        render_queue: &RenderQueue,
-        command_buffer: vk::CommandBuffer,
-        wait_semaphore: vk::Semaphore,
-        signal_semaphore: vk::Semaphore,
-        fence: vk::Fence,
-    ) -> Result<()> {
-        unsafe {
-            self.device.end_command_buffer(command_buffer)?;
-            render_queue.submit(command_buffer, wait_semaphore, signal_semaphore, fence)?;
-        }
-
-        Ok(())
-    }
-
     pub fn allocate(&self, desc: &AllocationCreateDesc) -> Allocation {
         let mut allocator = self.allocator.lock().unwrap();
         let allocation = allocator.allocate(desc).expect("Failed to allocate memory");

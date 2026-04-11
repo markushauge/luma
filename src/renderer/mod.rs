@@ -133,7 +133,7 @@ fn begin(
     mut swapchain: ResMut<Swapchain>,
     mut resource_state_tracker: ResMut<ResourceStateTracker>,
 ) -> Result<bool> {
-    render_device.begin_frame(render_context.command_buffer, render_context.fence)?;
+    render_context.begin_frame(&render_device)?;
     swapchain.acquire_next(render_context.semaphore)?;
 
     if swapchain.out_of_date {
@@ -177,14 +177,7 @@ fn end(
         )
         .flush(&render_device, render_context.command_buffer);
 
-    render_device.end_frame(
-        &render_queue,
-        render_context.command_buffer,
-        render_context.semaphore,
-        swapchain_image.semaphore,
-        render_context.fence,
-    )?;
-
+    render_context.end_frame(&render_device, &render_queue, swapchain_image.semaphore)?;
     swapchain.present(&render_queue)?;
     Ok(())
 }
