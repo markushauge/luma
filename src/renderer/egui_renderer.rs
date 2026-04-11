@@ -122,7 +122,7 @@ fn end(renderer: Res<Renderer>, mut egui_renderer: ResMut<EguiRenderer>) -> Resu
         renderer.command_pool,
         renderer.command_buffer,
         renderer.swapchain.surface_extent,
-        renderer.swapchain.present_image().image_view,
+        renderer.swapchain.current_image().image_view,
     )?;
     Ok(())
 }

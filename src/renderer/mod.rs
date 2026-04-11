@@ -176,12 +176,12 @@ impl Renderer {
             return Ok(());
         }
 
-        let present_image = self.swapchain.present_image();
+        let swapchain_image = self.swapchain.current_image();
 
         self.tracker
-            .track_image(present_image.image)
+            .track_image(swapchain_image.image)
             .transition_image(
-                present_image.image,
+                swapchain_image.image,
                 ImageState {
                     layout: vk::ImageLayout::GENERAL,
                     access: vk::AccessFlags2::TRANSFER_WRITE,
@@ -194,11 +194,11 @@ impl Renderer {
     }
 
     pub fn end(&mut self) -> Result<()> {
-        let present_image = self.swapchain.present_image();
+        let swapchain_image = self.swapchain.current_image();
 
         self.tracker
             .transition_image(
-                present_image.image,
+                swapchain_image.image,
                 ImageState {
                     layout: vk::ImageLayout::PRESENT_SRC_KHR,
                     access: vk::AccessFlags2::empty(),
@@ -211,7 +211,7 @@ impl Renderer {
             &self.render_queue,
             self.command_buffer,
             self.semaphore,
-            present_image.semaphore,
+            swapchain_image.semaphore,
             self.fence,
         )?;
 
@@ -223,8 +223,8 @@ impl Renderer {
     pub fn recreate_swapchain(&mut self, width: u32, height: u32) -> Result<()> {
         self.render_device.wait_idle()?;
 
-        for present_image in &self.swapchain.present_images {
-            self.tracker.untrack_image(present_image.image);
+        for swapchain_image in &self.swapchain.swapchain_images {
+            self.tracker.untrack_image(swapchain_image.image);
         }
 
         self.swapchain = Swapchain::new(

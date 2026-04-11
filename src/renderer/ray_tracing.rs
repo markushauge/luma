@@ -130,8 +130,8 @@ fn execute_ray_tracing_pipeline(
     let (camera, camera_transform) = camera.single()?;
 
     let command_buffer = renderer.command_buffer;
-    let present_image = renderer.swapchain.present_image().image;
-    let present_image_extent = renderer.swapchain.surface_extent;
+    let swapchain_image = renderer.swapchain.current_image().image;
+    let swapchain_image_extent = renderer.swapchain.surface_extent;
     let tracker = &mut renderer.tracker;
 
     ray_tracing_pipeline.trace_rays(
@@ -143,7 +143,12 @@ fn execute_ray_tracing_pipeline(
         time.elapsed().as_millis() as u32,
     );
 
-    ray_tracing_pipeline.blit(command_buffer, tracker, present_image, present_image_extent);
+    ray_tracing_pipeline.blit(
+        command_buffer,
+        tracker,
+        swapchain_image,
+        swapchain_image_extent,
+    );
 
     Ok(())
 }
@@ -251,8 +256,8 @@ impl RayTracingPipeline {
         &self,
         command_buffer: vk::CommandBuffer,
         tracker: &mut ResourceStateTracker,
-        present_image: vk::Image,
-        present_image_extent: vk::Extent2D,
+        swapchain_image: vk::Image,
+        swapchain_image_extent: vk::Extent2D,
     ) {
         tracker
             .transition_image(
@@ -280,8 +285,8 @@ impl RayTracingPipeline {
             vk::Offset3D { x, y, z: 1 },
         ];
 
-        let x = present_image_extent.width as i32;
-        let y = present_image_extent.height as i32;
+        let x = swapchain_image_extent.width as i32;
+        let y = swapchain_image_extent.height as i32;
 
         let dst_offsets = [
             vk::Offset3D { x: 0, y: 0, z: 0 },
@@ -299,7 +304,7 @@ impl RayTracingPipeline {
                 command_buffer,
                 self.storage_image.image,
                 vk::ImageLayout::GENERAL,
-                present_image,
+                swapchain_image,
                 vk::ImageLayout::GENERAL,
                 &[image_blit],
                 vk::Filter::LINEAR,

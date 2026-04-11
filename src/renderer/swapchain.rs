@@ -15,8 +15,8 @@ pub struct Swapchain {
     pub surface: vk::SurfaceKHR,
     pub surface_extent: vk::Extent2D,
     pub swapchain: vk::SwapchainKHR,
-    pub present_images: Vec<SwapchainImage>,
-    pub present_image_index: u32,
+    pub swapchain_images: Vec<SwapchainImage>,
+    pub swapchain_image_index: u32,
     pub out_of_date: bool,
 }
 
@@ -108,7 +108,7 @@ impl Swapchain {
                 .swapchain_device
                 .create_swapchain(&swapchain_create_info, None)?;
 
-            let present_images = render_device
+            let swapchain_images = render_device
                 .swapchain_device
                 .get_swapchain_images(swapchain)?
                 .into_iter()
@@ -143,7 +143,7 @@ impl Swapchain {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            let present_image_index = 0;
+            let swapchain_image_index = 0;
             let out_of_date = false;
 
             Ok(Self {
@@ -151,8 +151,8 @@ impl Swapchain {
                 surface,
                 surface_extent,
                 swapchain,
-                present_images,
-                present_image_index,
+                swapchain_images,
+                swapchain_image_index,
                 out_of_date,
             })
         }
@@ -169,7 +169,7 @@ impl Swapchain {
 
             self.out_of_date = match result {
                 Ok((image_index, suboptimal)) => {
-                    self.present_image_index = image_index;
+                    self.swapchain_image_index = image_index;
                     suboptimal
                 }
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
@@ -181,13 +181,13 @@ impl Swapchain {
     }
 
     pub fn present(&mut self, render_queue: &RenderQueue) -> Result<()> {
-        let present_image = self.present_image();
+        let swapchain_image = self.current_image();
 
         unsafe {
             let present_info = vk::PresentInfoKHR::default()
-                .wait_semaphores(std::slice::from_ref(&present_image.semaphore))
+                .wait_semaphores(std::slice::from_ref(&swapchain_image.semaphore))
                 .swapchains(std::slice::from_ref(&self.swapchain))
-                .image_indices(std::slice::from_ref(&self.present_image_index));
+                .image_indices(std::slice::from_ref(&self.swapchain_image_index));
 
             let result = self
                 .render_device
@@ -204,8 +204,8 @@ impl Swapchain {
         Ok(())
     }
 
-    pub fn present_image(&self) -> &SwapchainImage {
-        &self.present_images[self.present_image_index as usize]
+    pub fn current_image(&self) -> &SwapchainImage {
+        &self.swapchain_images[self.swapchain_image_index as usize]
     }
 }
 
@@ -214,14 +214,14 @@ impl Drop for Swapchain {
         self.render_device.wait_idle().unwrap();
 
         unsafe {
-            for present_image in self.present_images.drain(..) {
+            for swapchain_image in self.swapchain_images.drain(..) {
                 self.render_device
                     .device
-                    .destroy_semaphore(present_image.semaphore, None);
+                    .destroy_semaphore(swapchain_image.semaphore, None);
 
                 self.render_device
                     .device
-                    .destroy_image_view(present_image.image_view, None);
+                    .destroy_image_view(swapchain_image.image_view, None);
             }
 
             self.render_device
