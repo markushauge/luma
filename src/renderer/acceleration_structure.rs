@@ -91,10 +91,6 @@ fn build_acceleration_structures(
         })
         .collect();
 
-    if instances.is_empty() {
-        return Ok(());
-    }
-
     let tlas = render_device.create_tlas(&render_queue, &instances)?;
     commands.insert_resource(tlas);
     Ok(())
@@ -384,21 +380,27 @@ impl RenderDevice {
             let instance_buffer_size =
                 instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>();
 
-            let mut instance_buffer = self.create_buffer(
-                instance_buffer_size as u64,
-                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                MemoryLocation::CpuToGpu,
-                Some("TLAS Instance Buffer"),
-            )?;
+            let (instance_buffer, instance_buffer_address) = if instance_buffer_size > 0 {
+                let mut instance_buffer = self.create_buffer(
+                    instance_buffer_size as u64,
+                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                    MemoryLocation::CpuToGpu,
+                    Some("TLAS Instance Buffer"),
+                )?;
 
-            // Safety: AccelerationStructureInstanceKHR is repr(C)
-            let instance_bytes =
-                std::slice::from_raw_parts(instances.as_ptr().cast::<u8>(), instance_buffer_size);
+                // Safety: AccelerationStructureInstanceKHR is repr(C)
+                let instance_bytes = std::slice::from_raw_parts(
+                    instances.as_ptr().cast::<u8>(),
+                    instance_buffer_size,
+                );
 
-            instance_buffer.slice_mut()?.copy_from_slice(instance_bytes);
-
-            let instance_buffer_address = self.get_buffer_device_address(&instance_buffer);
+                instance_buffer.slice_mut()?.copy_from_slice(instance_bytes);
+                let instance_buffer_address = self.get_buffer_device_address(&instance_buffer);
+                (instance_buffer, instance_buffer_address)
+            } else {
+                (Buffer::default(), 0)
+            };
 
             let geometry = vk::AccelerationStructureGeometryKHR::default()
                 .geometry_type(vk::GeometryTypeKHR::INSTANCES)
