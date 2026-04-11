@@ -28,6 +28,7 @@ pub struct ShaderSettings {
     pub entry_point: Option<String>,
 }
 
+#[derive(TypePath)]
 pub struct ShaderLoader {
     compiler: shaderc::Compiler,
 }
@@ -53,10 +54,12 @@ impl AssetLoader for ShaderLoader {
         Box::pin(async move {
             let path = load_context
                 .path()
+                .path()
                 .to_str()
                 .ok_or_else(|| anyhow!("Path is not a valid UTF-8 string"))?;
 
             let extension = load_context
+                .path()
                 .path()
                 .extension()
                 .and_then(|extension| extension.to_str());
