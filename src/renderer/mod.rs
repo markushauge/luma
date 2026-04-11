@@ -7,6 +7,7 @@ mod render_device;
 mod render_queue;
 mod resource_state_tracker;
 mod schedule;
+mod shader;
 mod storage_image;
 mod swapchain;
 
@@ -22,9 +23,8 @@ use render_device::RenderDevice;
 use render_queue::RenderQueue;
 use resource_state_tracker::{ImageState, ResourceStateTracker};
 use schedule::{Render, RenderStartup, run_render_startup_schedule};
+use shader::ShaderPlugin;
 use swapchain::Swapchain;
-
-use crate::shader::ShaderPlugin;
 
 pub struct RendererPlugin;
 

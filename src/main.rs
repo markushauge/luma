@@ -1,7 +1,6 @@
 mod camera;
 mod panic;
 mod renderer;
-mod shader;
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},

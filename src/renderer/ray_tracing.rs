@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bytemuck::{Pod, Zeroable};
 use gpu_allocator::MemoryLocation;
 
-use crate::{camera::Camera, shader::Shader};
+use crate::camera::Camera;
 
 use super::{
     RenderDevice,
@@ -13,6 +13,7 @@ use super::{
     render_context::RenderContext,
     resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderSystems},
+    shader::Shader,
     storage_image::StorageImage,
     swapchain::Swapchain,
 };
