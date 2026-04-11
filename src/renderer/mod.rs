@@ -13,7 +13,7 @@ mod swapchain;
 use anyhow::Result;
 use ash::vk;
 use bevy::{
-    ecs::system::{RunSystemError, RunSystemOnce},
+    ecs::system::SystemId,
     prelude::*,
     window::{PrimaryWindow, RawHandleWrapper},
 };
@@ -103,28 +103,28 @@ fn recreate_swapchain(
     Ok(())
 }
 
-fn render(world: &mut World) -> Result<(), BevyError> {
-    if !is_swapchain_out_of_date(world) {
-        if let Err(RunSystemError::Failed(err)) = world.run_system_once(begin) {
-            return Err(err);
-        };
+#[derive(Default, Deref, DerefMut)]
+struct BeginSystemId(Option<SystemId<(), Result<bool>>>);
+
+#[derive(Default, Deref, DerefMut)]
+struct EndSystemId(Option<SystemId<(), Result<()>>>);
+
+fn render(
+    world: &mut World,
+    mut begin_system_id: Local<BeginSystemId>,
+    mut end_system_id: Local<EndSystemId>,
+) -> Result<(), BevyError> {
+    let begin_system_id = *begin_system_id.get_or_insert_with(|| world.register_system(begin));
+    let end_system_id = *end_system_id.get_or_insert_with(|| world.register_system(end));
+    let out_of_date = world.run_system(begin_system_id)??;
+
+    if out_of_date {
+        return Ok(());
     }
 
-    if !is_swapchain_out_of_date(world) {
-        world.run_schedule(Render);
-    }
-
-    if !is_swapchain_out_of_date(world) {
-        if let Err(RunSystemError::Failed(err)) = world.run_system_once(end) {
-            return Err(err);
-        };
-    }
-
+    world.run_schedule(Render);
+    world.run_system(end_system_id)??;
     Ok(())
-}
-
-fn is_swapchain_out_of_date(world: &World) -> bool {
-    world.resource::<Swapchain>().out_of_date
 }
 
 fn begin(
@@ -132,12 +132,12 @@ fn begin(
     render_context: Res<RenderContext>,
     mut swapchain: ResMut<Swapchain>,
     mut resource_state_tracker: ResMut<ResourceStateTracker>,
-) -> Result<()> {
+) -> Result<bool> {
     render_device.begin_frame(render_context.command_buffer, render_context.fence)?;
     swapchain.acquire_next(render_context.semaphore)?;
 
     if swapchain.out_of_date {
-        return Ok(());
+        return Ok(true);
     }
 
     let swapchain_image = swapchain.current_image();
@@ -154,7 +154,7 @@ fn begin(
         )
         .flush(&render_device, render_context.command_buffer);
 
-    Ok(())
+    Ok(false)
 }
 
 fn end(
