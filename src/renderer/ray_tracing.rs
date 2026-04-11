@@ -74,6 +74,7 @@ fn create_or_update_ray_tracing_pipeline(
     settings: Res<RayTracingSettings>,
     ray_tracing_shaders: Res<RayTracingShaders>,
     assets: Res<Assets<Shader>>,
+    mut asset_events: MessageReader<AssetEvent<Shader>>,
 ) -> Result<(), BevyError> {
     let Some(raygen_shader) = assets.get(&ray_tracing_shaders.raygen) else {
         return Ok(());
@@ -87,6 +88,10 @@ fn create_or_update_ray_tracing_pipeline(
         return Ok(());
     };
 
+    let is_shader_modified = asset_events
+        .read()
+        .any(|asset_event| matches!(asset_event, AssetEvent::Modified { .. },));
+
     let vk::Extent2D { width, height } = swapchain.surface_extent;
 
     let extent = vk::Extent2D {
@@ -94,8 +99,8 @@ fn create_or_update_ray_tracing_pipeline(
         height: (height as f32 * settings.resolution_scaling) as u32,
     };
 
-    match ray_tracing_pipeline {
-        None => {
+    match (ray_tracing_pipeline, is_shader_modified) {
+        (None, false) | (_, true) => {
             commands.insert_resource(
                 RayTracingPipeline::builder(render_device.clone())
                     .with_raygen_shader_group(raygen_shader)?
@@ -104,7 +109,7 @@ fn create_or_update_ray_tracing_pipeline(
                     .build(extent)?,
             );
         }
-        Some(mut ray_tracing_pipeline) => {
+        (Some(mut ray_tracing_pipeline), false) => {
             if ray_tracing_pipeline.storage_image.extent != extent {
                 ray_tracing_pipeline.recreate_storage_image(extent, &mut resource_state_tracker)?;
             }

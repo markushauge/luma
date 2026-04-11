@@ -37,6 +37,7 @@ features = [
     "bevy_window",
     "bevy_winit",
     "debug",
+    "file_watcher",
 ]
 version = "0.17.2"
 
