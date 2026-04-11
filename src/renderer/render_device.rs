@@ -6,8 +6,9 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use ash::{khr, vk};
-use bevy::{prelude::*, window::RawHandleWrapper};
+use bevy::prelude::*;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
+use raw_window_handle::RawDisplayHandle;
 
 use super::render_queue::RenderQueue;
 
@@ -30,12 +31,11 @@ pub struct RenderDeviceInner {
 }
 
 impl RenderDevice {
-    pub fn new(handle: &RawHandleWrapper) -> Result<(Self, RenderQueue)> {
+    pub fn new(display_handle: RawDisplayHandle) -> Result<(Self, RenderQueue)> {
         unsafe {
             let entry = ash::Entry::load()?;
             let application_info = vk::ApplicationInfo::default().api_version(Self::api_version());
             let instance_layers = Self::instance_layers();
-            let display_handle = handle.get_display_handle();
             let window_extensions = ash_window::enumerate_required_extensions(display_handle)?;
 
             let instance_create_info = vk::InstanceCreateInfo::default()

@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use ash::vk;
-use bevy::{prelude::*, window::RawHandleWrapper};
+use bevy::prelude::*;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
 use super::{RenderDevice, render_queue::RenderQueue};
 
@@ -25,7 +26,8 @@ impl Swapchain {
     pub fn new(
         render_device: RenderDevice,
         render_queue: &RenderQueue,
-        handle: &RawHandleWrapper,
+        display_handle: RawDisplayHandle,
+        window_handle: RawWindowHandle,
         width: u32,
         height: u32,
         old_swapchain: Option<&mut Self>,
@@ -37,9 +39,6 @@ impl Swapchain {
                     std::mem::take(&mut old_swapchain.surface),
                 ),
                 None => {
-                    let display_handle = handle.get_display_handle();
-                    let window_handle = handle.get_window_handle();
-
                     let surface = ash_window::create_surface(
                         &render_device.entry,
                         &render_device.instance,

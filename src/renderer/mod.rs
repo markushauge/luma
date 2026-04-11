@@ -47,17 +47,16 @@ fn setup_renderer(
     windows: Query<(&Window, &RawHandleWrapper), With<PrimaryWindow>>,
 ) -> Result<(), BevyError> {
     let (window, handle) = windows.single()?;
-    let width = window.physical_width();
-    let height = window.physical_height();
-    let (render_device, render_queue) = RenderDevice::new(&handle)?;
+    let (render_device, render_queue) = RenderDevice::new(handle.get_display_handle())?;
     let render_context = RenderContext::new(render_device.clone(), &render_queue)?;
 
     let swapchain = Swapchain::new(
         render_device.clone(),
         &render_queue,
-        &handle,
-        width,
-        height,
+        handle.get_display_handle(),
+        handle.get_window_handle(),
+        window.physical_width(),
+        window.physical_height(),
         None,
     )?;
 
@@ -81,22 +80,21 @@ fn recreate_swapchain(
         return Ok(());
     }
 
-    let (window, handle) = windows.single()?;
-    let width = window.physical_width();
-    let height = window.physical_height();
-
     render_device.wait_idle();
 
     for swapchain_image in &swapchain.swapchain_images {
         resource_state_tracker.untrack_image(swapchain_image.image);
     }
 
+    let (window, handle) = windows.single()?;
+
     *swapchain = Swapchain::new(
         render_device.clone(),
         &render_queue,
-        &handle,
-        width,
-        height,
+        handle.get_display_handle(),
+        handle.get_window_handle(),
+        window.physical_width(),
+        window.physical_height(),
         Some(&mut swapchain),
     )?;
 
