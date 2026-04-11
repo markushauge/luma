@@ -14,7 +14,6 @@ struct PushConstants
     float3 cameraTranslation;
     float3x3 cameraRotation;
     float cameraFov;
-    uint timeMillis;
 }
 
 [[vk::push_constant]]

@@ -126,7 +126,6 @@ fn execute_ray_tracing_pipeline(
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
     tlas: Option<Res<Tlas>>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
-    time: Res<Time>,
 ) -> Result<(), BevyError> {
     let Some(ray_tracing_pipeline) = ray_tracing_pipeline else {
         return Ok(());
@@ -144,7 +143,6 @@ fn execute_ray_tracing_pipeline(
         &tlas,
         camera_transform,
         camera.vertical_fov(),
-        time.elapsed().as_millis() as u32,
     );
 
     ray_tracing_pipeline.blit(
@@ -179,7 +177,6 @@ impl RayTracingPipeline {
         tlas: &Tlas,
         camera_transform: &Transform,
         camera_fov: f32,
-        time_millis: u32,
     ) {
         unsafe {
             let mut acceleration_structure_info =
@@ -212,7 +209,6 @@ impl RayTracingPipeline {
             camera_translation: camera_transform.translation,
             camera_rotation: Mat3::from_quat(camera_transform.rotation),
             camera_fov,
-            time_millis,
         };
 
         unsafe {
@@ -747,5 +743,4 @@ struct PushConstants {
     camera_translation: Vec3,
     camera_rotation: Mat3,
     camera_fov: f32,
-    time_millis: u32,
 }
