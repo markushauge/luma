@@ -5,9 +5,11 @@ use bevy::ecs::{
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum RenderSystems {
-    PreRender,
-    Render,
-    PostRender,
+    Prepare,
+    Queue,
+    QueueRayTracing,
+    QueueUi,
+    Submit,
 }
 
 #[derive(ScheduleLabel, Debug, Hash, PartialEq, Eq, Clone)]
@@ -28,11 +30,17 @@ impl Render {
 
         schedule.configure_sets(
             (
-                RenderSystems::PreRender,
-                RenderSystems::Render,
-                RenderSystems::PostRender,
+                RenderSystems::Prepare,
+                RenderSystems::Queue,
+                RenderSystems::Submit,
             )
                 .chain(),
+        );
+
+        schedule.configure_sets(
+            (RenderSystems::QueueRayTracing, RenderSystems::QueueUi)
+                .chain()
+                .in_set(RenderSystems::Queue),
         );
 
         schedule

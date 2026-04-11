@@ -22,7 +22,7 @@ impl Plugin for EguiPlugin {
     fn build(&self, app: &mut App) {
         app.add_schedule(EguiPass::schedule())
             .add_systems(RenderStartup, setup)
-            .add_systems(Render, run_egui_pass.in_set(RenderSystems::PostRender))
+            .add_systems(Render, run_egui_pass.in_set(RenderSystems::QueueUi))
             .add_systems(
                 EguiPass,
                 (

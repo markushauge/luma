@@ -8,7 +8,7 @@ use crate::{camera::Camera, shader::Shader};
 
 use super::{
     RenderDevice,
-    acceleration_structure::{AccelerationStructureManager, AccelerationStructurePlugin, Tlas},
+    acceleration_structure::{AccelerationStructurePlugin, Tlas},
     buffer::Buffer,
     render_context::RenderContext,
     resource_state_tracker::{ImageState, ResourceStateTracker},
@@ -30,11 +30,9 @@ impl Plugin for RayTracingPlugin {
             .add_systems(
                 Render,
                 (
-                    create_or_update_ray_tracing_pipeline,
-                    execute_ray_tracing_pipeline,
-                )
-                    .chain()
-                    .in_set(RenderSystems::Render),
+                    create_or_update_ray_tracing_pipeline.in_set(RenderSystems::Prepare),
+                    execute_ray_tracing_pipeline.in_set(RenderSystems::QueueRayTracing),
+                ),
             );
     }
 }
@@ -121,7 +119,7 @@ fn execute_ray_tracing_pipeline(
     render_context: Res<RenderContext>,
     mut resource_state_tracker: ResMut<ResourceStateTracker>,
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
-    acceleration_structure_manager: Res<AccelerationStructureManager>,
+    tlas: Option<Res<Tlas>>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
     time: Res<Time>,
 ) -> Result<(), BevyError> {
@@ -129,7 +127,7 @@ fn execute_ray_tracing_pipeline(
         return Ok(());
     };
 
-    let Some(tlas) = acceleration_structure_manager.tlas() else {
+    let Some(tlas) = tlas else {
         return Ok(());
     };
 
@@ -138,7 +136,7 @@ fn execute_ray_tracing_pipeline(
     ray_tracing_pipeline.trace_rays(
         render_context.command_buffer,
         &mut resource_state_tracker,
-        tlas,
+        &tlas,
         camera_transform,
         camera.vertical_fov(),
         time.elapsed().as_millis() as u32,

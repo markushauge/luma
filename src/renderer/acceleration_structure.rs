@@ -9,15 +9,20 @@ use bevy::{
 use gpu_allocator::MemoryLocation;
 
 use super::{
-    buffer::Buffer, render_device::RenderDevice, render_queue::RenderQueue, schedule::Render,
+    buffer::Buffer,
+    render_device::RenderDevice,
+    render_queue::RenderQueue,
+    schedule::{Render, RenderSystems},
 };
 
 pub struct AccelerationStructurePlugin;
 
 impl Plugin for AccelerationStructurePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<BlasManager>()
-            .add_systems(Render, build_acceleration_structures);
+        app.init_resource::<BlasManager>().add_systems(
+            Render,
+            build_acceleration_structures.in_set(RenderSystems::Prepare),
+        );
     }
 }
 
