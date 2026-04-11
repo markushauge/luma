@@ -1,4 +1,7 @@
 /target
 
+# SPIR-V shader binaries
+*.spv
+
 # Visual Studio Code
 .vscode/

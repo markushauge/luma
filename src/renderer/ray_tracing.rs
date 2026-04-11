@@ -59,9 +59,9 @@ struct RayTracingShaders {
 
 fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(RayTracingShaders {
-        raygen: asset_server.load("shaders/raygen.rgen"),
-        miss: asset_server.load("shaders/miss.rmiss"),
-        closest_hit: asset_server.load("shaders/closest_hit.rchit"),
+        raygen: asset_server.load("shaders/raygen.slang"),
+        miss: asset_server.load("shaders/miss.slang"),
+        closest_hit: asset_server.load("shaders/closest-hit.slang"),
     });
 }
 

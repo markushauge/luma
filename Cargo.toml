@@ -23,7 +23,6 @@ egui-winit = "0.33.3"
 native-dialog = "0.9.6"
 raw-window-handle = "0.6.2"
 serde = "1.0.228"
-shaderc = "0.10.1"
 tracing = "0.1.44"
 
 [dependencies.bevy]
