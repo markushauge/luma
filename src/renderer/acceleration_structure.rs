@@ -9,64 +9,81 @@ use bevy::{
 use gpu_allocator::MemoryLocation;
 
 use super::{
-    Device, Renderer,
     buffer::Buffer,
-    schedule::{Render, RenderStartup},
+    render_device::RenderDevice,
+    render_queue::RenderQueue,
+    schedule::{Render, RenderSystems},
 };
 
 pub struct AccelerationStructurePlugin;
 
 impl Plugin for AccelerationStructurePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(RenderStartup, create_acceleration_structure_manager)
-            .add_systems(Render, (build_blases, build_tlas).chain());
+        app.init_resource::<BlasManager>().add_systems(
+            Render,
+            build_acceleration_structures.in_set(RenderSystems::Prepare),
+        );
     }
 }
 
-fn create_acceleration_structure_manager(mut commands: Commands, renderer: Res<Renderer>) {
-    commands.insert_resource(AccelerationStructureManager::new(renderer.device.clone()));
-}
-
-fn build_blases(
-    mut manager: ResMut<AccelerationStructureManager>,
+fn build_acceleration_structures(
+    mut commands: Commands,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    mut blas_manager: ResMut<BlasManager>,
+    tlas: Option<ResMut<Tlas>>,
     meshes: Res<Assets<Mesh>>,
     mut asset_events: MessageReader<AssetEvent<Mesh>>,
-) {
+    mesh3ds: Query<(&Transform, &Mesh3d)>,
+    changed_mesh3ds: Query<(), Changed<Mesh3d>>,
+    changed_transforms: Query<(), (Changed<Transform>, With<Mesh3d>)>,
+    removed_mesh3ds: RemovedComponents<Mesh3d>,
+) -> Result<(), BevyError> {
+    let mut build_tlas = tlas.is_none()
+        | !changed_mesh3ds.is_empty()
+        | !changed_transforms.is_empty()
+        | !removed_mesh3ds.is_empty();
+
     for asset_event in asset_events.read() {
-        if let AssetEvent::Added { id } = asset_event {
-            let Some(mesh) = meshes.get(*id) else {
-                tracing::error!("Mesh with ID {} not found in Assets<Mesh>.", id);
-                continue;
-            };
+        match asset_event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => {
+                let Some(mesh) = meshes.get(*id) else {
+                    continue;
+                };
 
-            if let Err(err) = manager.insert_mesh(*id, mesh) {
-                tracing::error!("{}", err);
-                continue;
+                let Some(VertexAttributeValues::Float32x3(vertices)) =
+                    mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+                else {
+                    tracing::error!("Mesh does not contain [f32; 3] positions.");
+                    continue;
+                };
+
+                let Some(Indices::U32(indices)) = mesh.indices() else {
+                    tracing::error!("Mesh does not contain u32 indices.");
+                    continue;
+                };
+
+                let blas = render_device.create_blas(&render_queue, vertices, indices)?;
+                blas_manager.blases.insert(*id, blas);
+                build_tlas = true;
             }
-
-            manager.tlas_dirty = true;
+            AssetEvent::Removed { id } | AssetEvent::Unused { id } => {
+                blas_manager.blases.remove(id);
+                build_tlas = true;
+            }
         }
     }
-}
 
-fn build_tlas(
-    mut manager: ResMut<AccelerationStructureManager>,
-    query: Query<(&Transform, &Mesh3d)>,
-    changed_mesh3d: Query<(), Changed<Mesh3d>>,
-    changed_transform: Query<(), (Changed<Transform>, With<Mesh3d>)>,
-    removed_mesh3d: RemovedComponents<Mesh3d>,
-) {
-    manager.tlas_dirty |=
-        !changed_mesh3d.is_empty() || !changed_transform.is_empty() || !removed_mesh3d.is_empty();
-
-    if !manager.tlas_dirty {
-        return;
+    if !build_tlas {
+        return Ok(());
     }
 
-    let instances: Vec<_> = query
+    let instances: Vec<_> = mesh3ds
         .iter()
         .filter_map(|(transform, Mesh3d(mesh_handle))| {
-            let blas = manager.blases.get(&mesh_handle.id())?;
+            let blas = blas_manager.blases.get(&mesh_handle.id())?;
             Some(BlasInstance {
                 blas,
                 transform: *transform,
@@ -74,77 +91,19 @@ fn build_tlas(
         })
         .collect();
 
-    if instances.is_empty() {
-        return;
-    }
-
-    let tlas = match manager.device.create_tlas(&instances) {
-        Ok(tlas) => tlas,
-        Err(err) => {
-            tracing::error!("{}", err);
-            return;
-        }
-    };
-
-    manager.tlas = Some(tlas);
-    manager.tlas_dirty = false;
+    let tlas = render_device.create_tlas(&render_queue, &instances)?;
+    commands.insert_resource(tlas);
+    Ok(())
 }
 
-#[derive(Resource)]
-pub struct AccelerationStructureManager {
-    device: Device,
+#[derive(Resource, Default)]
+pub struct BlasManager {
     blases: HashMap<AssetId<Mesh>, Blas>,
-    tlas: Option<Tlas>,
-    tlas_dirty: bool,
-}
-
-impl AccelerationStructureManager {
-    fn new(device: Device) -> Self {
-        Self {
-            device,
-            blases: HashMap::new(),
-            tlas: None,
-            tlas_dirty: false,
-        }
-    }
-
-    fn insert_mesh(&mut self, asset_id: AssetId<Mesh>, mesh: &Mesh) -> Result<()> {
-        let Some(VertexAttributeValues::Float32x3(vertices)) =
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-        else {
-            anyhow::bail!("Mesh does not contain [f32; 3] positions.");
-        };
-
-        let Some(Indices::U32(indices)) = mesh.indices() else {
-            anyhow::bail!("Mesh does not contain u32 indices.");
-        };
-
-        let blas = self.device.create_blas(vertices, indices)?;
-        self.blases.insert(asset_id, blas);
-        Ok(())
-    }
-
-    pub fn tlas(&self) -> Option<&Tlas> {
-        self.tlas.as_ref()
-    }
-}
-
-impl Drop for AccelerationStructureManager {
-    fn drop(&mut self) {
-        unsafe {
-            for (_, blas) in std::mem::take(&mut self.blases) {
-                self.device.destroy_blas(blas);
-            }
-
-            if let Some(tlas) = self.tlas.take() {
-                self.device.destroy_tlas(tlas);
-            }
-        }
-    }
 }
 
 #[derive(Resource)]
 pub struct Blas {
+    render_device: RenderDevice,
     acceleration_structure: vk::AccelerationStructureKHR,
     buffer: Buffer,
     device_address: vk::DeviceAddress,
@@ -159,6 +118,7 @@ pub struct BlasInstance<'a> {
 
 #[derive(Resource)]
 pub struct Tlas {
+    render_device: RenderDevice,
     acceleration_structure: vk::AccelerationStructureKHR,
     buffer: Buffer,
     instance_buffer: Buffer,
@@ -170,8 +130,13 @@ impl Tlas {
     }
 }
 
-impl Device {
-    pub fn create_blas(&self, vertices: &[[f32; 3]], indices: &[u32]) -> Result<Blas> {
+impl RenderDevice {
+    pub fn create_blas(
+        &self,
+        render_queue: &RenderQueue,
+        vertices: &[[f32; 3]],
+        indices: &[u32],
+    ) -> Result<Blas> {
         unsafe {
             let mut vertex_buffer = self.create_buffer(
                 size_of_val(vertices) as u64,
@@ -278,7 +243,7 @@ impl Device {
 
             let command_pool = self.device.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
-                    .queue_family_index(self.queue_family_index)
+                    .queue_family_index(render_queue.queue_family_index)
                     .flags(vk::CommandPoolCreateFlags::TRANSIENT),
                 None,
             )?;
@@ -322,7 +287,7 @@ impl Device {
             self.device.end_command_buffer(command_buffer)?;
 
             self.device.queue_submit(
-                self.queue,
+                render_queue.queue,
                 &[
                     vk::SubmitInfo::default()
                         .command_buffers(std::slice::from_ref(&command_buffer)),
@@ -330,7 +295,7 @@ impl Device {
                 vk::Fence::null(),
             )?;
 
-            self.device.queue_wait_idle(self.queue)?;
+            self.device.queue_wait_idle(render_queue.queue)?;
             self.device.destroy_command_pool(command_pool, None);
             self.destroy_buffer(scratch_buffer);
 
@@ -342,6 +307,7 @@ impl Device {
                 );
 
             Ok(Blas {
+                render_device: self.clone(),
                 acceleration_structure,
                 buffer,
                 device_address,
@@ -350,20 +316,33 @@ impl Device {
             })
         }
     }
+}
 
-    pub unsafe fn destroy_blas(&self, blas: Blas) {
+impl Drop for Blas {
+    fn drop(&mut self) {
         unsafe {
-            self.acceleration_structure_device
-                .destroy_acceleration_structure(blas.acceleration_structure, None);
-            self.destroy_buffer(blas.buffer);
-            self.destroy_buffer(blas.index_buffer);
-            self.destroy_buffer(blas.vertex_buffer);
+            self.render_device
+                .acceleration_structure_device
+                .destroy_acceleration_structure(self.acceleration_structure, None);
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.buffer));
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.vertex_buffer));
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.index_buffer));
         }
     }
 }
 
-impl Device {
-    pub fn create_tlas(&self, instances: &[BlasInstance]) -> Result<Tlas> {
+impl RenderDevice {
+    pub fn create_tlas(
+        &self,
+        render_queue: &RenderQueue,
+        instances: &[BlasInstance],
+    ) -> Result<Tlas> {
         unsafe {
             let instances: Vec<vk::AccelerationStructureInstanceKHR> = instances
                 .iter()
@@ -401,21 +380,27 @@ impl Device {
             let instance_buffer_size =
                 instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>();
 
-            let mut instance_buffer = self.create_buffer(
-                instance_buffer_size as u64,
-                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                MemoryLocation::CpuToGpu,
-                Some("TLAS Instance Buffer"),
-            )?;
+            let (instance_buffer, instance_buffer_address) = if instance_buffer_size > 0 {
+                let mut instance_buffer = self.create_buffer(
+                    instance_buffer_size as u64,
+                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+                    MemoryLocation::CpuToGpu,
+                    Some("TLAS Instance Buffer"),
+                )?;
 
-            // Safety: AccelerationStructureInstanceKHR is repr(C)
-            let instance_bytes =
-                std::slice::from_raw_parts(instances.as_ptr().cast::<u8>(), instance_buffer_size);
+                // Safety: AccelerationStructureInstanceKHR is repr(C)
+                let instance_bytes = std::slice::from_raw_parts(
+                    instances.as_ptr().cast::<u8>(),
+                    instance_buffer_size,
+                );
 
-            instance_buffer.slice_mut()?.copy_from_slice(instance_bytes);
-
-            let instance_buffer_address = self.get_buffer_device_address(&instance_buffer);
+                instance_buffer.slice_mut()?.copy_from_slice(instance_bytes);
+                let instance_buffer_address = self.get_buffer_device_address(&instance_buffer);
+                (instance_buffer, instance_buffer_address)
+            } else {
+                (Buffer::default(), 0)
+            };
 
             let geometry = vk::AccelerationStructureGeometryKHR::default()
                 .geometry_type(vk::GeometryTypeKHR::INSTANCES)
@@ -485,7 +470,7 @@ impl Device {
 
             let command_pool = self.device.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
-                    .queue_family_index(self.queue_family_index)
+                    .queue_family_index(render_queue.queue_family_index)
                     .flags(vk::CommandPoolCreateFlags::TRANSIENT),
                 None,
             )?;
@@ -517,7 +502,7 @@ impl Device {
             self.device.end_command_buffer(command_buffer)?;
 
             self.device.queue_submit(
-                self.queue,
+                render_queue.queue,
                 &[
                     vk::SubmitInfo::default()
                         .command_buffers(std::slice::from_ref(&command_buffer)),
@@ -525,24 +510,32 @@ impl Device {
                 vk::Fence::null(),
             )?;
 
-            self.device.queue_wait_idle(self.queue)?;
+            self.device.queue_wait_idle(render_queue.queue)?;
             self.device.destroy_command_pool(command_pool, None);
             self.destroy_buffer(scratch_buffer);
 
             Ok(Tlas {
+                render_device: self.clone(),
                 acceleration_structure,
                 buffer,
                 instance_buffer,
             })
         }
     }
+}
 
-    pub unsafe fn destroy_tlas(&self, tlas: Tlas) {
+impl Drop for Tlas {
+    fn drop(&mut self) {
         unsafe {
-            self.acceleration_structure_device
-                .destroy_acceleration_structure(tlas.acceleration_structure, None);
-            self.destroy_buffer(tlas.buffer);
-            self.destroy_buffer(tlas.instance_buffer);
+            self.render_device
+                .acceleration_structure_device
+                .destroy_acceleration_structure(self.acceleration_structure, None);
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.buffer));
+
+            self.render_device
+                .destroy_buffer(std::mem::take(&mut self.instance_buffer));
         }
     }
 }

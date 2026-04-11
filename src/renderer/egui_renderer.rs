@@ -9,8 +9,11 @@ use bevy::{
 use egui::ViewportId;
 
 use super::{
-    Device, Renderer,
+    render_context::RenderContext,
+    render_device::RenderDevice,
+    render_queue::RenderQueue,
     schedule::{Render, RenderStartup, RenderSystems},
+    swapchain::Swapchain,
 };
 
 pub struct EguiPlugin;
@@ -19,7 +22,7 @@ impl Plugin for EguiPlugin {
     fn build(&self, app: &mut App) {
         app.add_schedule(EguiPass::schedule())
             .add_systems(RenderStartup, setup)
-            .add_systems(Render, run_egui_pass.in_set(RenderSystems::PostRender))
+            .add_systems(Render, run_egui_pass.in_set(RenderSystems::QueueUi))
             .add_systems(
                 EguiPass,
                 (
@@ -66,7 +69,7 @@ pub struct EguiContext(egui::Context);
 fn setup(
     mut commands: Commands,
     display_handle: Res<DisplayHandleWrapper>,
-    renderer: Res<Renderer>,
+    render_device: Res<RenderDevice>,
 ) -> Result<(), BevyError> {
     let context = egui::Context::default();
 
@@ -79,7 +82,7 @@ fn setup(
         None,
     );
 
-    let egui_renderer = EguiRenderer::new(renderer.device.clone(), context.clone())?;
+    let egui_renderer = EguiRenderer::new(render_device.clone(), context.clone())?;
     commands.insert_resource(EguiContext(context));
     commands.insert_resource(EguiState(state));
     commands.insert_resource(egui_renderer);
@@ -114,34 +117,40 @@ fn begin(
     Ok(())
 }
 
-fn end(renderer: Res<Renderer>, mut egui_renderer: ResMut<EguiRenderer>) -> Result<(), BevyError> {
+fn end(
+    render_queue: Res<RenderQueue>,
+    render_context: Res<RenderContext>,
+    swapchain: Res<Swapchain>,
+    mut egui_renderer: ResMut<EguiRenderer>,
+) -> Result<(), BevyError> {
     egui_renderer.end(
-        renderer.command_pool,
-        renderer.command_buffer,
-        renderer.swapchain.surface_extent,
-        renderer.swapchain.present_image().image_view,
+        &render_queue,
+        render_context.command_pool,
+        render_context.command_buffer,
+        swapchain.surface_extent,
+        swapchain.current_image().image_view,
     )?;
     Ok(())
 }
 
 #[derive(Resource)]
 pub struct EguiRenderer {
-    pub device: Device,
+    pub render_device: RenderDevice,
     pub context: egui::Context,
     pub renderer: egui_ash_renderer::Renderer,
     pub textures_to_free: Vec<egui::TextureId>,
 }
 
 impl EguiRenderer {
-    pub fn new(device: Device, context: egui::Context) -> Result<Self> {
+    pub fn new(render_device: RenderDevice, context: egui::Context) -> Result<Self> {
         let dynamic_rendering = egui_ash_renderer::DynamicRendering {
             color_attachment_format: vk::Format::B8G8R8A8_UNORM,
             depth_attachment_format: None,
         };
 
         let renderer = egui_ash_renderer::Renderer::with_gpu_allocator(
-            device.allocator.clone(),
-            device.device.clone(),
+            render_device.allocator.clone(),
+            render_device.device.clone(),
             dynamic_rendering,
             default(),
         )?;
@@ -149,7 +158,7 @@ impl EguiRenderer {
         let textures_to_free = Vec::new();
 
         Ok(Self {
-            device,
+            render_device,
             context,
             renderer,
             textures_to_free,
@@ -168,6 +177,7 @@ impl EguiRenderer {
 
     pub fn end(
         &mut self,
+        render_queue: &RenderQueue,
         command_pool: vk::CommandPool,
         command_buffer: vk::CommandBuffer,
         extent: vk::Extent2D,
@@ -186,7 +196,7 @@ impl EguiRenderer {
 
         if !textures_delta.set.is_empty() {
             self.renderer
-                .set_textures(self.device.queue, command_pool, &textures_delta.set)?;
+                .set_textures(render_queue.queue, command_pool, &textures_delta.set)?;
         }
 
         let clipped_primitives = self.context.tessellate(shapes, pixels_per_point);
@@ -206,7 +216,7 @@ impl EguiRenderer {
             .color_attachments(std::slice::from_ref(&rendering_attachment_info));
 
         unsafe {
-            self.device
+            self.render_device
                 .device
                 .cmd_begin_rendering(command_buffer, &rendering_info);
 
@@ -217,7 +227,7 @@ impl EguiRenderer {
                 &clipped_primitives,
             )?;
 
-            self.device.device.cmd_end_rendering(command_buffer);
+            self.render_device.device.cmd_end_rendering(command_buffer);
         }
 
         Ok(())

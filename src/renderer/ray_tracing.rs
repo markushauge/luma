@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use anyhow::{Result, anyhow};
 use ash::vk;
 use bevy::prelude::*;
@@ -9,12 +7,14 @@ use gpu_allocator::MemoryLocation;
 use crate::{camera::Camera, shader::Shader};
 
 use super::{
-    Device, Renderer,
-    acceleration_structure::{AccelerationStructureManager, AccelerationStructurePlugin, Tlas},
+    RenderDevice,
+    acceleration_structure::{AccelerationStructurePlugin, Tlas},
     buffer::Buffer,
+    render_context::RenderContext,
     resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderSystems},
     storage_image::StorageImage,
+    swapchain::Swapchain,
 };
 
 #[derive(Default)]
@@ -30,11 +30,9 @@ impl Plugin for RayTracingPlugin {
             .add_systems(
                 Render,
                 (
-                    create_or_update_ray_tracing_pipeline,
-                    execute_ray_tracing_pipeline,
-                )
-                    .chain()
-                    .in_set(RenderSystems::Render),
+                    create_or_update_ray_tracing_pipeline.in_set(RenderSystems::Prepare),
+                    execute_ray_tracing_pipeline.in_set(RenderSystems::QueueRayTracing),
+                ),
             );
     }
 }
@@ -69,7 +67,9 @@ fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 fn create_or_update_ray_tracing_pipeline(
     mut commands: Commands,
-    mut renderer: ResMut<Renderer>,
+    render_device: Res<RenderDevice>,
+    swapchain: Res<Swapchain>,
+    mut resource_state_tracker: ResMut<ResourceStateTracker>,
     ray_tracing_pipeline: Option<ResMut<RayTracingPipeline>>,
     settings: Res<RayTracingSettings>,
     ray_tracing_shaders: Res<RayTracingShaders>,
@@ -87,7 +87,7 @@ fn create_or_update_ray_tracing_pipeline(
         return Ok(());
     };
 
-    let vk::Extent2D { width, height } = renderer.swapchain.surface_extent;
+    let vk::Extent2D { width, height } = swapchain.surface_extent;
 
     let extent = vk::Extent2D {
         width: (width as f32 * settings.resolution_scaling) as u32,
@@ -97,7 +97,7 @@ fn create_or_update_ray_tracing_pipeline(
     match ray_tracing_pipeline {
         None => {
             commands.insert_resource(
-                RayTracingPipeline::builder(renderer.device.clone())
+                RayTracingPipeline::builder(render_device.clone())
                     .with_raygen_shader_group(raygen_shader)?
                     .with_miss_shader_group(miss_shader)?
                     .with_hit_shader_group(closest_hit_shader, None, None)?
@@ -106,7 +106,7 @@ fn create_or_update_ray_tracing_pipeline(
         }
         Some(mut ray_tracing_pipeline) => {
             if ray_tracing_pipeline.storage_image.extent != extent {
-                ray_tracing_pipeline.recreate_storage_image(extent, &mut renderer.tracker)?;
+                ray_tracing_pipeline.recreate_storage_image(extent, &mut resource_state_tracker)?;
             }
         }
     }
@@ -115,9 +115,11 @@ fn create_or_update_ray_tracing_pipeline(
 }
 
 fn execute_ray_tracing_pipeline(
-    mut renderer: ResMut<Renderer>,
+    swapchain: Res<Swapchain>,
+    render_context: Res<RenderContext>,
+    mut resource_state_tracker: ResMut<ResourceStateTracker>,
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
-    acceleration_structure_manager: Res<AccelerationStructureManager>,
+    tlas: Option<Res<Tlas>>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
     time: Res<Time>,
 ) -> Result<(), BevyError> {
@@ -125,34 +127,34 @@ fn execute_ray_tracing_pipeline(
         return Ok(());
     };
 
-    let Some(tlas) = acceleration_structure_manager.tlas() else {
+    let Some(tlas) = tlas else {
         return Ok(());
     };
 
     let (camera, camera_transform) = camera.single()?;
 
-    let command_buffer = renderer.command_buffer;
-    let present_image = renderer.swapchain.present_image().image;
-    let present_image_extent = renderer.swapchain.surface_extent;
-    let tracker = &mut renderer.tracker;
-
     ray_tracing_pipeline.trace_rays(
-        command_buffer,
-        tracker,
-        tlas,
+        render_context.command_buffer,
+        &mut resource_state_tracker,
+        &tlas,
         camera_transform,
         camera.vertical_fov(),
         time.elapsed().as_millis() as u32,
     );
 
-    ray_tracing_pipeline.blit(command_buffer, tracker, present_image, present_image_extent);
+    ray_tracing_pipeline.blit(
+        render_context.command_buffer,
+        &mut resource_state_tracker,
+        swapchain.current_image().image,
+        swapchain.surface_extent,
+    );
 
     Ok(())
 }
 
 #[derive(Resource)]
 pub struct RayTracingPipeline {
-    pub device: Device,
+    pub render_device: RenderDevice,
     pub pipeline: vk::Pipeline,
     pub pipeline_layout: vk::PipelineLayout,
     pub shader_binding_table: ShaderBindingTable,
@@ -161,8 +163,8 @@ pub struct RayTracingPipeline {
 }
 
 impl RayTracingPipeline {
-    pub fn builder<'a>(device: Device) -> RayTracingPipelineBuilder<'a> {
-        RayTracingPipelineBuilder::new(device)
+    pub fn builder<'a>(render_device: RenderDevice) -> RayTracingPipelineBuilder<'a> {
+        RayTracingPipelineBuilder::new(render_device)
     }
 
     pub fn trace_rays(
@@ -179,7 +181,7 @@ impl RayTracingPipeline {
                 vk::WriteDescriptorSetAccelerationStructureKHR::default()
                     .acceleration_structures(std::slice::from_ref(tlas.acceleration_structure()));
 
-            self.device.device.update_descriptor_sets(
+            self.render_device.device.update_descriptor_sets(
                 &[vk::WriteDescriptorSet::default()
                     .dst_set(self.descriptor_set)
                     .dst_binding(1)
@@ -199,7 +201,7 @@ impl RayTracingPipeline {
                     stages: vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR,
                 },
             )
-            .flush(&self.device, command_buffer);
+            .flush(&self.render_device, command_buffer);
 
         let push_constants = PushConstants {
             viewport_width: self.storage_image.extent.width,
@@ -211,13 +213,13 @@ impl RayTracingPipeline {
         };
 
         unsafe {
-            self.device.device.cmd_bind_pipeline(
+            self.render_device.device.cmd_bind_pipeline(
                 command_buffer,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
                 self.pipeline,
             );
 
-            self.device.device.cmd_bind_descriptor_sets(
+            self.render_device.device.cmd_bind_descriptor_sets(
                 command_buffer,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
                 self.pipeline_layout,
@@ -226,7 +228,7 @@ impl RayTracingPipeline {
                 &[],
             );
 
-            self.device.device.cmd_push_constants(
+            self.render_device.device.cmd_push_constants(
                 command_buffer,
                 self.pipeline_layout,
                 vk::ShaderStageFlags::RAYGEN_KHR,
@@ -234,16 +236,18 @@ impl RayTracingPipeline {
                 bytemuck::bytes_of(&push_constants),
             );
 
-            self.device.ray_tracing_pipeline_device.cmd_trace_rays(
-                command_buffer,
-                &self.shader_binding_table.raygen_region,
-                &self.shader_binding_table.miss_region,
-                &self.shader_binding_table.hit_region,
-                &self.shader_binding_table.callable_region,
-                self.storage_image.extent.width,
-                self.storage_image.extent.height,
-                1,
-            );
+            self.render_device
+                .ray_tracing_pipeline_device
+                .cmd_trace_rays(
+                    command_buffer,
+                    &self.shader_binding_table.raygen_region,
+                    &self.shader_binding_table.miss_region,
+                    &self.shader_binding_table.hit_region,
+                    &self.shader_binding_table.callable_region,
+                    self.storage_image.extent.width,
+                    self.storage_image.extent.height,
+                    1,
+                );
         }
     }
 
@@ -251,8 +255,8 @@ impl RayTracingPipeline {
         &self,
         command_buffer: vk::CommandBuffer,
         tracker: &mut ResourceStateTracker,
-        present_image: vk::Image,
-        present_image_extent: vk::Extent2D,
+        swapchain_image: vk::Image,
+        swapchain_image_extent: vk::Extent2D,
     ) {
         tracker
             .transition_image(
@@ -263,7 +267,7 @@ impl RayTracingPipeline {
                     stages: vk::PipelineStageFlags2::TRANSFER,
                 },
             )
-            .flush(&self.device, command_buffer);
+            .flush(&self.render_device, command_buffer);
 
         let subresource = vk::ImageSubresourceLayers {
             aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -280,8 +284,8 @@ impl RayTracingPipeline {
             vk::Offset3D { x, y, z: 1 },
         ];
 
-        let x = present_image_extent.width as i32;
-        let y = present_image_extent.height as i32;
+        let x = swapchain_image_extent.width as i32;
+        let y = swapchain_image_extent.height as i32;
 
         let dst_offsets = [
             vk::Offset3D { x: 0, y: 0, z: 0 },
@@ -295,11 +299,11 @@ impl RayTracingPipeline {
             .dst_offsets(dst_offsets);
 
         unsafe {
-            self.device.device.cmd_blit_image(
+            self.render_device.device.cmd_blit_image(
                 command_buffer,
                 self.storage_image.image,
                 vk::ImageLayout::GENERAL,
-                present_image,
+                swapchain_image,
                 vk::ImageLayout::GENERAL,
                 &[image_blit],
                 vk::Filter::LINEAR,
@@ -312,9 +316,9 @@ impl RayTracingPipeline {
         extent: vk::Extent2D,
         tracker: &mut ResourceStateTracker,
     ) -> Result<()> {
-        self.device.wait_idle()?;
+        self.render_device.wait_idle();
 
-        let new_storage_image = self.device.create_storage_image(
+        let new_storage_image = self.render_device.create_storage_image(
             extent,
             vk::Format::R8G8B8A8_UNORM,
             Some("Ray Tracing Pipeline Storage Image"),
@@ -331,14 +335,14 @@ impl RayTracingPipeline {
             .image_info(std::slice::from_ref(&image_info));
 
         unsafe {
-            self.device
+            self.render_device
                 .device
                 .update_descriptor_sets(&[write_descriptor_set], &[]);
         }
 
         let old_storage_image = std::mem::replace(&mut self.storage_image, new_storage_image);
         tracker.untrack_image(old_storage_image.image);
-        self.device.destroy_storage_image(old_storage_image);
+        self.render_device.destroy_storage_image(old_storage_image);
         Ok(())
     }
 }
@@ -346,11 +350,13 @@ impl RayTracingPipeline {
 impl Drop for RayTracingPipeline {
     fn drop(&mut self) {
         unsafe {
-            self.shader_binding_table.destroy(&self.device);
-            self.device
+            self.shader_binding_table.destroy(&self.render_device);
+            self.render_device
                 .destroy_storage_image(std::mem::take(&mut self.storage_image));
-            self.device.device.destroy_pipeline(self.pipeline, None);
-            self.device
+            self.render_device
+                .device
+                .destroy_pipeline(self.pipeline, None);
+            self.render_device
                 .device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
         }
@@ -366,13 +372,13 @@ pub struct ShaderBindingTable {
 }
 
 impl ShaderBindingTable {
-    unsafe fn destroy(&mut self, device: &Device) {
-        device.destroy_buffer(std::mem::take(&mut self.buffer));
+    unsafe fn destroy(&mut self, render_device: &RenderDevice) {
+        render_device.destroy_buffer(std::mem::take(&mut self.buffer));
     }
 }
 
 pub struct RayTracingPipelineBuilder<'a> {
-    device: Device,
+    render_device: RenderDevice,
     shader_modules: Vec<vk::ShaderModule>,
     shader_stages: Vec<vk::PipelineShaderStageCreateInfo<'a>>,
     shader_groups: Vec<vk::RayTracingShaderGroupCreateInfoKHR<'a>>,
@@ -382,9 +388,9 @@ pub struct RayTracingPipelineBuilder<'a> {
 }
 
 impl<'a> RayTracingPipelineBuilder<'a> {
-    pub fn new(device: Device) -> Self {
+    pub fn new(render_device: RenderDevice) -> Self {
         Self {
-            device,
+            render_device,
             shader_modules: Vec::new(),
             shader_stages: Vec::new(),
             shader_groups: Vec::new(),
@@ -483,7 +489,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .bindings(&descriptor_set_layout_bindings);
 
             let descriptor_set_layout = self
-                .device
+                .render_device
                 .device
                 .create_descriptor_set_layout(&descriptor_set_layout_create_info, None)?;
 
@@ -497,7 +503,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .push_constant_ranges(std::slice::from_ref(&push_constant_range));
 
             let pipeline_layout = self
-                .device
+                .render_device
                 .device
                 .create_pipeline_layout(&pipeline_layout_create_info, None)?;
 
@@ -507,7 +513,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .max_pipeline_ray_recursion_depth(1)
                 .layout(pipeline_layout);
 
-            let ray_tracing_pipeline_device = &self.device.ray_tracing_pipeline_device;
+            let ray_tracing_pipeline_device = &self.render_device.ray_tracing_pipeline_device;
 
             let pipelines = ray_tracing_pipeline_device
                 .create_ray_tracing_pipelines(
@@ -528,12 +534,12 @@ impl<'a> RayTracingPipelineBuilder<'a> {
             let shader_binding_table = self.build_sbt(pipeline)?;
 
             for shader_module in self.shader_modules {
-                self.device
+                self.render_device
                     .device
                     .destroy_shader_module(shader_module, None);
             }
 
-            let storage_image = self.device.create_storage_image(
+            let storage_image = self.render_device.create_storage_image(
                 extent,
                 vk::Format::R8G8B8A8_UNORM,
                 Some("Ray Tracing Pipeline Storage Image"),
@@ -553,7 +559,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .pool_sizes(&pool_sizes);
 
             let descriptor_pool = self
-                .device
+                .render_device
                 .device
                 .create_descriptor_pool(&descriptor_pool_create_info, None)?;
 
@@ -562,7 +568,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .set_layouts(std::slice::from_ref(&descriptor_set_layout));
 
             let [descriptor_set] = self
-                .device
+                .render_device
                 .device
                 .allocate_descriptor_sets(&descriptor_set_allocate_info)?
                 .try_into()
@@ -572,7 +578,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                 .image_view(storage_image.image_view)
                 .image_layout(vk::ImageLayout::GENERAL);
 
-            self.device.device.update_descriptor_sets(
+            self.render_device.device.update_descriptor_sets(
                 &[vk::WriteDescriptorSet::default()
                     .dst_set(descriptor_set)
                     .dst_binding(0)
@@ -582,7 +588,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
             );
 
             Ok(RayTracingPipeline {
-                device: self.device,
+                render_device: self.render_device,
                 pipeline,
                 pipeline_layout,
                 shader_binding_table,
@@ -598,7 +604,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
         stage_flag: vk::ShaderStageFlags,
     ) -> Result<u32, vk::Result> {
         let shader_module = unsafe {
-            self.device.device.create_shader_module(
+            self.render_device.device.create_shader_module(
                 &vk::ShaderModuleCreateInfo::default().code(&shader.code),
                 None,
             )?
@@ -638,7 +644,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
 
     fn build_sbt(&self, pipeline: vk::Pipeline) -> Result<ShaderBindingTable> {
         let rt_props = self
-            .device
+            .render_device
             .get_physical_device_ray_tracing_pipeline_properties();
 
         let handle_size = rt_props.shader_group_handle_size as usize;
@@ -661,7 +667,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
 
         let sbt_size = hit_region_offset + hit_region_size;
 
-        let mut buffer = self.device.create_buffer(
+        let mut buffer = self.render_device.create_buffer(
             sbt_size as u64,
             vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
@@ -671,7 +677,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
 
         let group_count = self.shader_groups.len();
         let shader_handles = unsafe {
-            self.device
+            self.render_device
                 .ray_tracing_pipeline_device
                 .get_ray_tracing_shader_group_handles(
                     pipeline,
@@ -703,7 +709,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
             sbt_data[dst..][..handle_size].copy_from_slice(&shader_handles[src..][..handle_size]);
         }
 
-        let sbt_address = self.device.get_buffer_device_address(&buffer);
+        let sbt_address = self.render_device.get_buffer_device_address(&buffer);
 
         let raygen_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(sbt_address + raygen_region_offset as u64)

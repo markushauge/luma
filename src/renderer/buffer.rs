@@ -5,7 +5,7 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme},
 };
 
-use super::device::Device;
+use super::render_device::RenderDevice;
 
 #[derive(Default)]
 #[expect(dead_code)]
@@ -16,7 +16,7 @@ pub struct Buffer {
     pub allocation: Allocation,
 }
 
-impl Device {
+impl RenderDevice {
     pub fn create_buffer(
         &self,
         size: u64,
