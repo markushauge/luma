@@ -320,8 +320,8 @@ impl RayTracingPipeline {
 
         let new_storage_image = self.render_device.create_storage_image(
             extent,
-            vk::Format::R8G8B8A8_UNORM,
-            Some("Ray Tracing Pipeline Storage Image"),
+            self.storage_image.format,
+            Some(&self.storage_image.name),
         )?;
 
         let image_info = vk::DescriptorImageInfo::default()

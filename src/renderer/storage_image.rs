@@ -8,7 +8,6 @@ use gpu_allocator::{
 use super::RenderDevice;
 
 #[derive(Default)]
-#[expect(dead_code)]
 pub struct StorageImage {
     pub extent: vk::Extent2D,
     pub format: vk::Format,
