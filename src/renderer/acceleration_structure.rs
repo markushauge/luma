@@ -6,6 +6,7 @@ use bevy::{
     mesh::{Indices, VertexAttributeValues},
     prelude::*,
 };
+use bytemuck::{Pod, Zeroable};
 use gpu_allocator::MemoryLocation;
 
 use super::{
@@ -54,10 +55,8 @@ fn build_acceleration_structures(
                     continue;
                 };
 
-                let Some(VertexAttributeValues::Float32x3(vertices)) =
-                    mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-                else {
-                    tracing::error!("Mesh does not contain [f32; 3] positions.");
+                let Some(vertices) = mesh_to_vertices(mesh) else {
+                    tracing::error!("Mesh is missing required vertex attributes.");
                     continue;
                 };
 
@@ -66,7 +65,7 @@ fn build_acceleration_structures(
                     continue;
                 };
 
-                let blas = render_device.create_blas(&render_queue, vertices, indices)?;
+                let blas = render_device.create_blas(&render_queue, &vertices, indices)?;
                 blas_manager.blases.insert(*id, blas);
                 build_tlas = true;
             }
@@ -95,6 +94,44 @@ fn build_acceleration_structures(
     let tlas = render_device.create_tlas(&render_queue, &instances)?;
     commands.insert_resource(tlas);
     Ok(())
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub struct Vertex {
+    pub position: Vec3,
+    pub normal: Vec3,
+    pub uv: Vec2,
+}
+
+fn mesh_to_vertices(mesh: &Mesh) -> Option<Vec<Vertex>> {
+    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION)? {
+        VertexAttributeValues::Float32x3(positions) => positions,
+        _ => return None,
+    };
+
+    let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL)? {
+        VertexAttributeValues::Float32x3(normals) => normals,
+        _ => return None,
+    };
+
+    let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0)? {
+        VertexAttributeValues::Float32x2(uvs) => uvs,
+        _ => return None,
+    };
+
+    let vertices = positions
+        .iter()
+        .zip(normals.iter())
+        .zip(uvs.iter())
+        .map(|((position, normal), uv)| Vertex {
+            position: Vec3::from(*position),
+            normal: Vec3::from(*normal),
+            uv: Vec2::from(*uv),
+        })
+        .collect();
+
+    Some(vertices)
 }
 
 #[derive(Resource, Default)]
@@ -135,7 +172,7 @@ impl RenderDevice {
     pub fn create_blas(
         &self,
         render_queue: &RenderQueue,
-        vertices: &[[f32; 3]],
+        vertices: &[Vertex],
         indices: &[u32],
     ) -> Result<Blas> {
         unsafe {
@@ -174,7 +211,7 @@ impl RenderDevice {
                         .vertex_data(vk::DeviceOrHostAddressConstKHR {
                             device_address: vertex_buffer.address,
                         })
-                        .vertex_stride(size_of::<[f32; 3]>() as u64)
+                        .vertex_stride(size_of::<Vertex>() as u64)
                         .max_vertex(vertices.len() as u32 - 1)
                         .index_type(vk::IndexType::UINT32)
                         .index_data(vk::DeviceOrHostAddressConstKHR {
