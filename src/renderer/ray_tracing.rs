@@ -710,7 +710,7 @@ impl<'a> RayTracingPipelineBuilder<'a> {
             sbt_data[dst..][..handle_size].copy_from_slice(&shader_handles[src..][..handle_size]);
         }
 
-        let sbt_address = self.render_device.get_buffer_device_address(&buffer);
+        let sbt_address = buffer.address;
 
         let raygen_region = vk::StridedDeviceAddressRegionKHR::default()
             .device_address(sbt_address + raygen_region_offset as u64)

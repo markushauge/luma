@@ -14,6 +14,7 @@ pub struct Buffer {
     pub usage: vk::BufferUsageFlags,
     pub buffer: vk::Buffer,
     pub allocation: Allocation,
+    pub address: vk::DeviceAddress,
     pub name: String,
 }
 
@@ -46,11 +47,16 @@ impl RenderDevice {
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
 
+            let address = self
+                .device
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer));
+
             Ok(Buffer {
                 size,
                 usage,
                 buffer,
                 allocation,
+                address,
                 name,
             })
         }
@@ -60,14 +66,6 @@ impl RenderDevice {
         unsafe {
             self.device.destroy_buffer(buffer.buffer, None);
             self.free(buffer.allocation);
-        }
-    }
-
-    pub fn get_buffer_device_address(&self, buffer: &Buffer) -> vk::DeviceAddress {
-        unsafe {
-            self.device.get_buffer_device_address(
-                &vk::BufferDeviceAddressInfo::default().buffer(buffer.buffer),
-            )
         }
     }
 }

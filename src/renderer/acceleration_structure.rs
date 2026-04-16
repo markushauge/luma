@@ -165,9 +165,6 @@ impl RenderDevice {
                 .slice_mut()?
                 .copy_from_slice(bytemuck::cast_slice(indices));
 
-            let vertex_buffer_address = self.get_buffer_device_address(&vertex_buffer);
-            let index_buffer_address = self.get_buffer_device_address(&index_buffer);
-
             let geometry = vk::AccelerationStructureGeometryKHR::default()
                 .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
                 .flags(vk::GeometryFlagsKHR::OPAQUE)
@@ -175,13 +172,13 @@ impl RenderDevice {
                     triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
                         .vertex_format(vk::Format::R32G32B32_SFLOAT)
                         .vertex_data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: vertex_buffer_address,
+                            device_address: vertex_buffer.address,
                         })
                         .vertex_stride(size_of::<[f32; 3]>() as u64)
                         .max_vertex(vertices.len() as u32 - 1)
                         .index_type(vk::IndexType::UINT32)
                         .index_data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: index_buffer_address,
+                            device_address: index_buffer.address,
                         }),
                 });
 
@@ -228,12 +225,10 @@ impl RenderDevice {
                 Some("BLAS Scratch Buffer"),
             )?;
 
-            let scratch_address = self.get_buffer_device_address(&scratch_buffer);
-
             let build_info = build_info
                 .dst_acceleration_structure(acceleration_structure)
                 .scratch_data(vk::DeviceOrHostAddressKHR {
-                    device_address: scratch_address,
+                    device_address: scratch_buffer.address,
                 });
 
             let build_range = vk::AccelerationStructureBuildRangeInfoKHR::default()
@@ -381,7 +376,7 @@ impl RenderDevice {
             let instance_buffer_size =
                 instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>();
 
-            let (instance_buffer, instance_buffer_address) = if instance_buffer_size > 0 {
+            let instance_buffer = if instance_buffer_size > 0 {
                 let mut instance_buffer = self.create_buffer(
                     instance_buffer_size as u64,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -397,10 +392,9 @@ impl RenderDevice {
                 );
 
                 instance_buffer.slice_mut()?.copy_from_slice(instance_bytes);
-                let instance_buffer_address = self.get_buffer_device_address(&instance_buffer);
-                (instance_buffer, instance_buffer_address)
+                instance_buffer
             } else {
-                (Buffer::default(), 0)
+                Buffer::default()
             };
 
             let geometry = vk::AccelerationStructureGeometryKHR::default()
@@ -410,7 +404,7 @@ impl RenderDevice {
                     instances: vk::AccelerationStructureGeometryInstancesDataKHR::default()
                         .array_of_pointers(false)
                         .data(vk::DeviceOrHostAddressConstKHR {
-                            device_address: instance_buffer_address,
+                            device_address: instance_buffer.address,
                         }),
                 });
 
@@ -455,12 +449,10 @@ impl RenderDevice {
                 Some("TLAS Scratch Buffer"),
             )?;
 
-            let scratch_address = self.get_buffer_device_address(&scratch_buffer);
-
             let build_info = build_info
                 .dst_acceleration_structure(acceleration_structure)
                 .scratch_data(vk::DeviceOrHostAddressKHR {
-                    device_address: scratch_address,
+                    device_address: scratch_buffer.address,
                 });
 
             let build_range = vk::AccelerationStructureBuildRangeInfoKHR::default()
