@@ -1,4 +1,4 @@
-use std::{ffi::CString, path::Path, process::Command};
+use std::{ffi::CString, fs::File, io::Read, path::Path, process::Command};
 
 use anyhow::{Error, Ok, Result, anyhow};
 use bevy::{
@@ -56,14 +56,27 @@ impl AssetLoader for ShaderLoader {
                 return Err(anyhow!("{stderr}"));
             }
 
-            let mut file = std::fs::File::open(&output_path)
+            let file = File::open(&output_path)
                 .map_err(|e| anyhow!("Failed to open compiled shader: {e}"))?;
 
-            let code = ash::util::read_spv(&mut file)
-                .map_err(|e| anyhow!("Failed to read compiled shader: {e}"))?;
+            let code =
+                read_spv(file).map_err(|e| anyhow!("Failed to read compiled shader: {e}"))?;
 
             let entry_point = c"main".to_owned();
             Ok(Shader { code, entry_point })
         })
     }
+}
+
+fn read_spv(mut file: File) -> Result<Vec<u32>> {
+    let len = file.metadata()?.len() as usize;
+
+    if !len.is_multiple_of(4) {
+        anyhow::bail!("SPIR-V bytecode length must be divisible by 4");
+    }
+
+    let words = len / 4;
+    let mut code = vec![0; words];
+    file.read_exact(bytemuck::cast_slice_mut(&mut code))?;
+    Ok(code)
 }
