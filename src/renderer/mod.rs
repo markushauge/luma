@@ -181,7 +181,8 @@ fn end(
 }
 
 fn on_app_exit(mut app_exit_events: MessageReader<AppExit>, render_device: Res<RenderDevice>) {
-    if let Some(_) = app_exit_events.read().next() {
+    if !app_exit_events.is_empty() {
+        app_exit_events.clear();
         render_device.wait_idle();
     }
 }

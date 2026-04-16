@@ -168,8 +168,7 @@ impl RenderDevice {
 
     pub fn allocate(&self, desc: &AllocationCreateDesc) -> Allocation {
         let mut allocator = self.allocator.lock().unwrap();
-        let allocation = allocator.allocate(desc).expect("Failed to allocate memory");
-        allocation
+        allocator.allocate(desc).expect("Failed to allocate memory")
     }
 
     pub fn free(&self, allocation: Allocation) {

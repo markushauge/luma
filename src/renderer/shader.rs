@@ -49,7 +49,7 @@ impl AssetLoader for ShaderLoader {
 
             let output = command.output()?;
 
-            if output.stderr.len() > 0 {
+            if !output.stderr.is_empty() {
                 let stderr = std::str::from_utf8(&output.stderr)
                     .map_err(|e| anyhow!("Failed to parse shader compiler output: {e}"))?;
 

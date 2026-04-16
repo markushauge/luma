@@ -26,6 +26,7 @@ impl Plugin for AccelerationStructurePlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_acceleration_structures(
     mut commands: Commands,
     render_device: Res<RenderDevice>,

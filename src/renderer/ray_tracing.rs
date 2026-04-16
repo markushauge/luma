@@ -66,6 +66,7 @@ fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_or_update_ray_tracing_pipeline(
     mut commands: Commands,
     render_device: Res<RenderDevice>,
