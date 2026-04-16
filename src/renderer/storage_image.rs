@@ -15,6 +15,7 @@ pub struct StorageImage {
     pub image: vk::Image,
     pub image_view: vk::ImageView,
     pub allocation: Allocation,
+    pub name: String,
 }
 
 impl RenderDevice {
@@ -38,9 +39,10 @@ impl RenderDevice {
 
             let image = self.device.create_image(&image_create_info, None)?;
             let requirements = self.device.get_image_memory_requirements(image);
+            let name = name.unwrap_or("Storage Image").to_owned();
 
             let allocation = self.allocate(&AllocationCreateDesc {
-                name: name.unwrap_or("Storage Image"),
+                name: &name,
                 requirements,
                 location: MemoryLocation::GpuOnly,
                 linear: true,
@@ -72,6 +74,7 @@ impl RenderDevice {
                 image,
                 image_view,
                 allocation,
+                name,
             })
         }
     }

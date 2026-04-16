@@ -14,6 +14,7 @@ pub struct Buffer {
     pub usage: vk::BufferUsageFlags,
     pub buffer: vk::Buffer,
     pub allocation: Allocation,
+    pub name: String,
 }
 
 impl RenderDevice {
@@ -32,9 +33,10 @@ impl RenderDevice {
 
             let buffer = self.device.create_buffer(&buffer_create_info, None)?;
             let requirements = self.device.get_buffer_memory_requirements(buffer);
+            let name = name.unwrap_or("Buffer").to_string();
 
             let allocation = self.allocate(&AllocationCreateDesc {
-                name: name.unwrap_or("Buffer"),
+                name: &name,
                 requirements,
                 location,
                 linear: true,
@@ -49,6 +51,7 @@ impl RenderDevice {
                 usage,
                 buffer,
                 allocation,
+                name,
             })
         }
     }
