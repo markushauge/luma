@@ -12,6 +12,7 @@ use super::{
     render_context::RenderContext,
     render_device::RenderDevice,
     render_queue::RenderQueue,
+    resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderStartup, RenderSystems},
     swapchain::Swapchain,
 };
@@ -121,15 +122,10 @@ fn end(
     render_queue: Res<RenderQueue>,
     render_context: Res<RenderContext>,
     swapchain: Res<Swapchain>,
+    mut tracker: ResMut<ResourceStateTracker>,
     mut egui_renderer: ResMut<EguiRenderer>,
 ) -> Result<(), BevyError> {
-    egui_renderer.end(
-        &render_queue,
-        render_context.command_pool,
-        render_context.command_buffer,
-        swapchain.surface_extent,
-        swapchain.current_image().image_view,
-    )?;
+    egui_renderer.end(&render_queue, &render_context, &swapchain, &mut tracker)?;
     Ok(())
 }
 
@@ -178,10 +174,9 @@ impl EguiRenderer {
     pub fn end(
         &mut self,
         render_queue: &RenderQueue,
-        command_pool: vk::CommandPool,
-        command_buffer: vk::CommandBuffer,
-        extent: vk::Extent2D,
-        image_view: vk::ImageView,
+        render_context: &RenderContext,
+        swapchain: &Swapchain,
+        tracker: &mut ResourceStateTracker,
     ) -> Result<()> {
         let egui::FullOutput {
             textures_delta,
@@ -195,22 +190,37 @@ impl EguiRenderer {
         }
 
         if !textures_delta.set.is_empty() {
-            self.renderer
-                .set_textures(render_queue.queue, command_pool, &textures_delta.set)?;
+            self.renderer.set_textures(
+                render_queue.queue,
+                render_context.command_pool,
+                &textures_delta.set,
+            )?;
         }
 
         let clipped_primitives = self.context.tessellate(shapes, pixels_per_point);
+        let swapchain_image = swapchain.current_image();
+
+        tracker
+            .transition_image(
+                swapchain_image.image,
+                ImageState {
+                    access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    stages: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                },
+            )
+            .flush(&self.render_device, render_context.command_buffer);
 
         let rendering_attachment_info = vk::RenderingAttachmentInfo::default()
-            .image_view(image_view)
-            .image_layout(vk::ImageLayout::GENERAL)
+            .image_view(swapchain_image.image_view)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
             .load_op(vk::AttachmentLoadOp::LOAD)
             .store_op(vk::AttachmentStoreOp::STORE);
 
         let rendering_info = vk::RenderingInfo::default()
             .render_area(vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent,
+                extent: swapchain.surface_extent,
             })
             .layer_count(1)
             .color_attachments(std::slice::from_ref(&rendering_attachment_info));
@@ -218,16 +228,18 @@ impl EguiRenderer {
         unsafe {
             self.render_device
                 .device
-                .cmd_begin_rendering(command_buffer, &rendering_info);
+                .cmd_begin_rendering(render_context.command_buffer, &rendering_info);
 
             self.renderer.cmd_draw(
-                command_buffer,
-                extent,
+                render_context.command_buffer,
+                swapchain.surface_extent,
                 pixels_per_point,
                 &clipped_primitives,
             )?;
 
-            self.render_device.device.cmd_end_rendering(command_buffer);
+            self.render_device
+                .device
+                .cmd_end_rendering(render_context.command_buffer);
         }
 
         Ok(())

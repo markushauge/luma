@@ -139,18 +139,7 @@ fn begin(
     }
 
     let swapchain_image = swapchain.current_image();
-
-    resource_state_tracker
-        .track_image(swapchain_image.image)
-        .transition_image(
-            swapchain_image.image,
-            ImageState {
-                layout: vk::ImageLayout::GENERAL,
-                access: vk::AccessFlags2::TRANSFER_WRITE,
-                stages: vk::PipelineStageFlags2::TRANSFER,
-            },
-        )
-        .flush(&render_device, render_context.command_buffer);
+    resource_state_tracker.track_image(swapchain_image.image);
 
     Ok(false)
 }

@@ -263,8 +263,16 @@ impl RayTracingPipeline {
             .transition_image(
                 self.storage_image.image,
                 ImageState {
-                    layout: vk::ImageLayout::GENERAL,
+                    layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                     access: vk::AccessFlags2::TRANSFER_READ,
+                    stages: vk::PipelineStageFlags2::TRANSFER,
+                },
+            )
+            .transition_image(
+                swapchain_image,
+                ImageState {
+                    layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    access: vk::AccessFlags2::TRANSFER_WRITE,
                     stages: vk::PipelineStageFlags2::TRANSFER,
                 },
             )
@@ -303,9 +311,9 @@ impl RayTracingPipeline {
             self.render_device.device.cmd_blit_image(
                 command_buffer,
                 self.storage_image.image,
-                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 swapchain_image,
-                vk::ImageLayout::GENERAL,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[image_blit],
                 vk::Filter::LINEAR,
             );
