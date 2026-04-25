@@ -55,17 +55,15 @@ fn build_acceleration_structures(
                     continue;
                 };
 
-                let Some(vertices) = mesh_to_vertices(mesh) else {
-                    tracing::error!("Mesh is missing required vertex attributes.");
-                    continue;
-                };
+                let vertex_buffer = mesh_to_vertex_buffer(&render_device, mesh)?;
+                let index_buffer = mesh_to_index_buffer(&render_device, mesh)?;
 
-                let Some(Indices::U32(indices)) = mesh.indices() else {
-                    tracing::error!("Mesh does not contain u32 indices.");
-                    continue;
-                };
+                let blas =
+                    render_device.create_blas(&render_queue, &vertex_buffer, &index_buffer)?;
 
-                let blas = render_device.create_blas(&render_queue, &vertices, indices)?;
+                render_device.destroy_buffer(vertex_buffer);
+                render_device.destroy_buffer(index_buffer);
+
                 blas_manager.blases.insert(*id, blas);
                 build_tlas = true;
             }
@@ -104,34 +102,65 @@ pub struct Vertex {
     pub uv: Vec2,
 }
 
-fn mesh_to_vertices(mesh: &Mesh) -> Option<Vec<Vertex>> {
-    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION)? {
-        VertexAttributeValues::Float32x3(positions) => positions,
-        _ => return None,
+fn mesh_to_vertex_buffer(render_device: &RenderDevice, mesh: &Mesh) -> Result<Buffer<Vertex>> {
+    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(positions)) => positions,
+        _ => return Err(anyhow!("Mesh is missing required position attribute")),
     };
 
-    let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL)? {
-        VertexAttributeValues::Float32x3(normals) => normals,
-        _ => return None,
+    let normals = match mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+        Some(VertexAttributeValues::Float32x3(normals)) => normals,
+        _ => return Err(anyhow!("Mesh is missing required normal attribute")),
     };
 
-    let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0)? {
-        VertexAttributeValues::Float32x2(uvs) => uvs,
-        _ => return None,
+    let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+        Some(VertexAttributeValues::Float32x2(uvs)) => uvs,
+        _ => return Err(anyhow!("Mesh is missing required UV attribute")),
     };
 
-    let vertices = positions
-        .iter()
-        .zip(normals.iter())
-        .zip(uvs.iter())
-        .map(|((position, normal), uv)| Vertex {
-            position: Vec3::from(*position),
-            normal: Vec3::from(*normal),
-            uv: Vec2::from(*uv),
-        })
-        .collect();
+    let attributes = positions.iter().zip(normals.iter()).zip(uvs.iter());
 
-    Some(vertices)
+    let mut vertex_buffer = render_device.create_buffer(
+        attributes.len() as u64,
+        vk::BufferUsageFlags::VERTEX_BUFFER
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+        MemoryLocation::CpuToGpu,
+        Some("Vertex Buffer"),
+    )?;
+
+    vertex_buffer
+        .slice_mut()?
+        .iter_mut()
+        .zip(attributes)
+        .for_each(|(vertex, ((position, normal), uv))| {
+            *vertex = Vertex {
+                position: Vec3::from(*position),
+                normal: Vec3::from(*normal),
+                uv: Vec2::from(*uv),
+            };
+        });
+
+    Ok(vertex_buffer)
+}
+
+fn mesh_to_index_buffer(render_device: &RenderDevice, mesh: &Mesh) -> Result<Buffer<u32>> {
+    let indices = match mesh.indices() {
+        Some(Indices::U32(indices)) => indices,
+        _ => return Err(anyhow!("Mesh is missing required indices")),
+    };
+
+    let mut index_buffer = render_device.create_buffer(
+        indices.len() as u64,
+        vk::BufferUsageFlags::INDEX_BUFFER
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+        MemoryLocation::CpuToGpu,
+        Some("Index Buffer"),
+    )?;
+
+    index_buffer.slice_mut()?.copy_from_slice(indices);
+    Ok(index_buffer)
 }
 
 #[derive(Resource, Default)]
@@ -145,8 +174,6 @@ pub struct Blas {
     acceleration_structure: vk::AccelerationStructureKHR,
     buffer: Buffer,
     device_address: vk::DeviceAddress,
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
 }
 
 pub struct BlasInstance<'a> {
@@ -172,36 +199,10 @@ impl RenderDevice {
     pub fn create_blas(
         &self,
         render_queue: &RenderQueue,
-        vertices: &[Vertex],
-        indices: &[u32],
+        vertex_buffer: &Buffer<Vertex>,
+        index_buffer: &Buffer<u32>,
     ) -> Result<Blas> {
         unsafe {
-            let mut vertex_buffer = self.create_buffer(
-                size_of_val(vertices) as u64,
-                vk::BufferUsageFlags::VERTEX_BUFFER
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                MemoryLocation::CpuToGpu,
-                Some("BLAS Vertex Buffer"),
-            )?;
-
-            vertex_buffer
-                .slice_mut()?
-                .copy_from_slice(bytemuck::cast_slice(vertices));
-
-            let mut index_buffer = self.create_buffer(
-                size_of_val(indices) as u64,
-                vk::BufferUsageFlags::INDEX_BUFFER
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                    | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                MemoryLocation::CpuToGpu,
-                Some("BLAS Index Buffer"),
-            )?;
-
-            index_buffer
-                .slice_mut()?
-                .copy_from_slice(bytemuck::cast_slice(indices));
-
             let geometry = vk::AccelerationStructureGeometryKHR::default()
                 .geometry_type(vk::GeometryTypeKHR::TRIANGLES)
                 .flags(vk::GeometryFlagsKHR::OPAQUE)
@@ -212,14 +213,14 @@ impl RenderDevice {
                             device_address: vertex_buffer.address,
                         })
                         .vertex_stride(size_of::<Vertex>() as u64)
-                        .max_vertex(vertices.len() as u32 - 1)
+                        .max_vertex(vertex_buffer.len as u32 - 1)
                         .index_type(vk::IndexType::UINT32)
                         .index_data(vk::DeviceOrHostAddressConstKHR {
                             device_address: index_buffer.address,
                         }),
                 });
 
-            let primitive_count = (indices.len() / 3) as u32;
+            let primitive_count = (index_buffer.len / 3) as u32;
 
             let build_info = vk::AccelerationStructureBuildGeometryInfoKHR::default()
                 .ty(vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL)
@@ -344,8 +345,6 @@ impl RenderDevice {
                 acceleration_structure,
                 buffer,
                 device_address,
-                vertex_buffer,
-                index_buffer,
             })
         }
     }
@@ -360,12 +359,6 @@ impl Drop for Blas {
 
             self.render_device
                 .destroy_buffer(std::mem::take(&mut self.buffer));
-
-            self.render_device
-                .destroy_buffer(std::mem::take(&mut self.vertex_buffer));
-
-            self.render_device
-                .destroy_buffer(std::mem::take(&mut self.index_buffer));
         }
     }
 }
