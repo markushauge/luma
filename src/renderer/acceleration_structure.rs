@@ -255,7 +255,7 @@ impl RenderDevice {
                     None,
                 )?;
 
-            let scratch_buffer = self.create_buffer(
+            let scratch_buffer: Buffer = self.create_buffer(
                 size_info.build_scratch_size,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 MemoryLocation::GpuOnly,
@@ -479,7 +479,7 @@ impl RenderDevice {
                     None,
                 )?;
 
-            let scratch_buffer = self.create_buffer(
+            let scratch_buffer: Buffer = self.create_buffer(
                 size_info.build_scratch_size,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
                 MemoryLocation::GpuOnly,
