@@ -1,7 +1,10 @@
 use anyhow::{Result, anyhow};
 use ash::vk;
 use bevy::{
-    ecs::system::{SystemParamItem, lifetimeless::SRes},
+    ecs::system::{
+        SystemParamItem,
+        lifetimeless::{SRes, SResMut},
+    },
     mesh::{Indices, VertexAttributeValues},
     prelude::*,
 };
@@ -14,17 +17,19 @@ use super::{
     render_asset::{RenderAsset, RenderAssets, sync_render_assets},
     render_device::RenderDevice,
     render_queue::RenderQueue,
-    schedule::{Render, RenderSystems},
+    schedule::{Render, RenderStartup, RenderSystems},
 };
 
 pub struct MeshPlugin;
 
 impl Plugin for MeshPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<RenderAssets<GpuMesh>>().add_systems(
-            Render,
-            sync_render_assets::<GpuMesh>.in_set(RenderSystems::PrepareAssets),
-        );
+        app.init_resource::<RenderAssets<GpuMesh>>()
+            .add_systems(RenderStartup, create_mesh_info_buffer)
+            .add_systems(
+                Render,
+                sync_render_assets::<GpuMesh>.in_set(RenderSystems::PrepareAssets),
+            );
     }
 }
 
@@ -40,19 +45,35 @@ pub struct GpuMesh {
     pub render_device: RenderDevice,
     pub vertex_buffer: Buffer<Vertex>,
     pub index_buffer: Buffer<u32>,
+    pub mesh_index: u32,
     pub blas: Blas,
 }
 
 impl RenderAsset for GpuMesh {
     type SourceAsset = Mesh;
-    type Param = (SRes<RenderDevice>, SRes<RenderQueue>);
+    type Param = (
+        SRes<RenderDevice>,
+        SRes<RenderQueue>,
+        SResMut<MeshInfoBuffer>,
+    );
 
     fn prepare(
-        mesh: &Self::SourceAsset,
-        (render_device, render_queue): &mut SystemParamItem<Self::Param>,
+        source_asset: &Self::SourceAsset,
+        (render_device, render_queue, mesh_info_buffer): &mut SystemParamItem<Self::Param>,
+        previous_asset: Option<&Self>,
     ) -> Result<Self> {
-        let vertex_buffer = mesh_to_vertex_buffer(render_device, mesh)?;
-        let index_buffer = mesh_to_index_buffer(render_device, mesh)?;
+        if let Some(previous_asset) = previous_asset {
+            mesh_info_buffer.remove(previous_asset.mesh_index)?;
+        }
+
+        let vertex_buffer = mesh_to_vertex_buffer(render_device, source_asset)?;
+        let index_buffer = mesh_to_index_buffer(render_device, source_asset)?;
+
+        let mesh_index = mesh_info_buffer.insert(MeshInfo {
+            vertex_buffer_address: vertex_buffer.address,
+            index_buffer_address: index_buffer.address,
+        })?;
+
         let blas = render_device.create_blas(render_queue, &vertex_buffer, &index_buffer)?;
         let render_device = render_device.clone();
 
@@ -60,6 +81,7 @@ impl RenderAsset for GpuMesh {
             render_device,
             vertex_buffer,
             index_buffer,
+            mesh_index,
             blas,
         })
     }
@@ -76,6 +98,108 @@ impl Drop for GpuMesh {
         self.render_device
             .destroy_buffer(std::mem::take(&mut self.vertex_buffer));
     }
+}
+
+#[repr(C)]
+#[derive(Default, Clone, Copy, Pod, Zeroable)]
+pub struct MeshInfo {
+    pub vertex_buffer_address: vk::DeviceAddress,
+    pub index_buffer_address: vk::DeviceAddress,
+}
+
+#[derive(Resource)]
+pub struct MeshInfoBuffer {
+    pub render_device: RenderDevice,
+    pub buffer: Buffer<MeshInfo>,
+    pub count: u32,
+    pub free_indices: Vec<u32>,
+}
+
+impl MeshInfoBuffer {
+    pub fn new(render_device: RenderDevice) -> Result<Self> {
+        let buffer = Self::allocate_buffer(&render_device, 256)?;
+
+        Ok(Self {
+            render_device,
+            buffer,
+            count: 0,
+            free_indices: Vec::new(),
+        })
+    }
+
+    pub fn insert(&mut self, mesh_info: MeshInfo) -> Result<u32> {
+        let index = if let Some(free_index) = self.free_indices.pop() {
+            free_index
+        } else {
+            let index = self.count;
+            self.count += 1;
+            self.ensure_capacity(self.count)?;
+            index
+        };
+
+        *self.index_mut(index)? = mesh_info;
+        Ok(index)
+    }
+
+    pub fn remove(&mut self, index: u32) -> Result<Option<MeshInfo>> {
+        if index >= self.count {
+            return Ok(None);
+        }
+
+        let mesh_info = std::mem::take(self.index_mut(index)?);
+        self.free_indices.push(index);
+        Ok(Some(mesh_info))
+    }
+
+    fn index_mut(&mut self, index: u32) -> Result<&mut MeshInfo> {
+        Ok(&mut self.buffer.slice_mut()?[index as usize])
+    }
+
+    fn ensure_capacity(&mut self, required_capacity: u32) -> Result<()> {
+        let old_capacity = self.buffer.len as u32;
+
+        if required_capacity <= old_capacity {
+            return Ok(());
+        }
+
+        let new_capacity = required_capacity.next_power_of_two().max(old_capacity * 2);
+        let mut new_buffer = Self::allocate_buffer(&self.render_device, new_capacity)?;
+
+        new_buffer.slice_mut()?[..self.buffer.len as usize]
+            .copy_from_slice(self.buffer.slice_mut()?);
+
+        self.render_device
+            .destroy_buffer(std::mem::replace(&mut self.buffer, new_buffer));
+
+        Ok(())
+    }
+
+    fn allocate_buffer(render_device: &RenderDevice, capacity: u32) -> Result<Buffer<MeshInfo>> {
+        render_device
+            .create_buffer(
+                capacity as u64,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                MemoryLocation::CpuToGpu,
+                Some("Mesh Info Buffer"),
+            )
+            .map_err(Into::into)
+    }
+}
+
+impl Drop for MeshInfoBuffer {
+    fn drop(&mut self) {
+        self.render_device
+            .destroy_buffer(std::mem::take(&mut self.buffer));
+    }
+}
+
+fn create_mesh_info_buffer(
+    mut commands: Commands,
+    render_device: Res<RenderDevice>,
+) -> Result<(), BevyError> {
+    let mesh_info_buffer = MeshInfoBuffer::new(render_device.clone())?;
+    commands.insert_resource(mesh_info_buffer);
+    Ok(())
 }
 
 fn mesh_to_vertex_buffer(render_device: &RenderDevice, mesh: &Mesh) -> Result<Buffer<Vertex>> {
@@ -109,8 +233,8 @@ fn mesh_to_vertex_buffer(render_device: &RenderDevice, mesh: &Mesh) -> Result<Bu
         .slice_mut()?
         .iter_mut()
         .zip(attributes)
-        .for_each(|(vertex, ((position, normal), uv))| {
-            *vertex = Vertex {
+        .for_each(|(slot, ((position, normal), uv))| {
+            *slot = Vertex {
                 position: Vec3::from(*position),
                 normal: Vec3::from(*normal),
                 uv: Vec2::from(*uv),

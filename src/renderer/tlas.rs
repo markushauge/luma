@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use ash::vk;
 use bevy::prelude::*;
+use bytemuck::{Pod, Zeroable};
 use gpu_allocator::MemoryLocation;
 
 use super::{
@@ -52,6 +53,7 @@ fn build_tlas(
             let mesh = gpu_meshes.get(&mesh_handle.id())?;
 
             Some(BlasInstance {
+                mesh_index: mesh.mesh_index,
                 blas: &mesh.blas,
                 transform: *transform,
             })
@@ -64,8 +66,47 @@ fn build_tlas(
 }
 
 pub struct BlasInstance<'a> {
+    pub mesh_index: u32,
     pub blas: &'a Blas,
     pub transform: Transform,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct AccelerationStructureInstance(vk::AccelerationStructureInstanceKHR);
+
+// Safety: AccelerationStructureInstanceKHR is repr(C)
+unsafe impl Pod for AccelerationStructureInstance {}
+unsafe impl Zeroable for AccelerationStructureInstance {}
+
+impl From<&BlasInstance<'_>> for AccelerationStructureInstance {
+    fn from(instance: &BlasInstance) -> Self {
+        let affine = instance.transform.compute_affine();
+        let x_axis = affine.x_axis;
+        let y_axis = affine.y_axis;
+        let z_axis = affine.z_axis;
+        let w_axis = affine.w_axis;
+
+        let transform = vk::TransformMatrixKHR {
+            matrix: [
+                x_axis.x, y_axis.x, z_axis.x, w_axis.x, // X
+                x_axis.y, y_axis.y, z_axis.y, w_axis.y, // Y
+                x_axis.z, y_axis.z, z_axis.z, w_axis.z, // Z
+            ],
+        };
+
+        Self(vk::AccelerationStructureInstanceKHR {
+            transform,
+            instance_custom_index_and_mask: vk::Packed24_8::new(instance.mesh_index, 0xFF),
+            instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
+                0,
+                vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as _,
+            ),
+            acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                device_handle: instance.blas.device_address,
+            },
+        })
+    }
 }
 
 #[derive(Resource)]
@@ -88,58 +129,25 @@ impl RenderDevice {
         instances: &[BlasInstance],
     ) -> Result<Tlas> {
         unsafe {
-            let instances: Vec<vk::AccelerationStructureInstanceKHR> = instances
-                .iter()
-                .map(|instance| {
-                    let affine = instance.transform.compute_affine();
-                    let x_axis = affine.x_axis;
-                    let y_axis = affine.y_axis;
-                    let z_axis = affine.z_axis;
-                    let w_axis = affine.w_axis;
-
-                    let transform = vk::TransformMatrixKHR {
-                        matrix: [
-                            x_axis.x, y_axis.x, z_axis.x, w_axis.x, // X
-                            x_axis.y, y_axis.y, z_axis.y, w_axis.y, // Y
-                            x_axis.z, y_axis.z, z_axis.z, w_axis.z, // Z
-                        ],
-                    };
-
-                    vk::AccelerationStructureInstanceKHR {
-                        transform,
-                        instance_custom_index_and_mask: vk::Packed24_8::new(0, 0xFF),
-                        instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
-                            0,
-                            vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw()
-                                as _,
-                        ),
-                        acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
-                            device_handle: instance.blas.device_address,
-                        },
-                    }
-                })
-                .collect();
-
             let instance_count = instances.len() as u32;
-            let instance_buffer_size =
-                instances.len() * size_of::<vk::AccelerationStructureInstanceKHR>();
 
-            let instance_buffer = if instance_buffer_size > 0 {
-                let mut instance_buffer = self.create_buffer(
-                    instance_buffer_size as u64,
+            let instance_buffer = if instance_count > 0 {
+                let mut instance_buffer = self.create_buffer::<AccelerationStructureInstance>(
+                    instance_count as u64,
                     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                         | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
                     MemoryLocation::CpuToGpu,
                     Some("TLAS Instance Buffer"),
                 )?;
 
-                // Safety: AccelerationStructureInstanceKHR is repr(C)
-                let instance_bytes = std::slice::from_raw_parts(
-                    instances.as_ptr().cast::<u8>(),
-                    instance_buffer_size,
-                );
+                instance_buffer
+                    .slice_mut()?
+                    .iter_mut()
+                    .zip(instances)
+                    .for_each(|(slot, instance)| {
+                        *slot = AccelerationStructureInstance::from(instance);
+                    });
 
-                instance_buffer.slice_mut()?.copy_from_slice(instance_bytes);
                 instance_buffer
             } else {
                 Buffer::default()

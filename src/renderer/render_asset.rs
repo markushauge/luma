@@ -13,6 +13,7 @@ pub trait RenderAsset: Send + Sync + Sized + 'static {
     fn prepare(
         source_asset: &Self::SourceAsset,
         param: &mut SystemParamItem<Self::Param>,
+        previous_asset: Option<&Self>,
     ) -> Result<Self>;
 }
 
@@ -55,7 +56,8 @@ pub fn sync_render_assets<A: RenderAsset>(
         match event {
             AssetEvent::Added { id } | AssetEvent::Modified { id } => {
                 if let Some(source) = assets.get(*id) {
-                    let render_asset = A::prepare(source, &mut param)?;
+                    let previous_asset = render_assets.get(id);
+                    let render_asset = A::prepare(source, &mut param, previous_asset)?;
                     render_assets.insert(*id, render_asset);
                 }
             }
