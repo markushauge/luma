@@ -1,23 +1,4 @@
-struct RayPayload
-{
-    float3 color;
-}
-
-[[vk::binding(0)]]
-RWTexture2D<float4> image;
-
-[[vk::binding(1)]]
-RaytracingAccelerationStructure topLevelAS;
-
-struct PushConstants
-{
-    float3 cameraTranslation;
-    float3x3 cameraRotation;
-    float cameraFov;
-}
-
-[[vk::push_constant]]
-PushConstants pc;
+import "common";
 
 [shader("raygeneration")]
 void main()

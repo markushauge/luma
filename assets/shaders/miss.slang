@@ -1,7 +1,4 @@
-struct RayPayload
-{
-    float3 color;
-}
+import "common";
 
 [shader("miss")]
 void main(inout RayPayload payload)

@@ -9,7 +9,7 @@ use crate::camera::Camera;
 use super::{
     RenderDevice,
     buffer::Buffer,
-    mesh::MeshPlugin,
+    mesh::{MeshInfoBuffer, MeshPlugin},
     render_context::RenderContext,
     resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderSystems},
@@ -128,6 +128,7 @@ fn execute_ray_tracing_pipeline(
     mut resource_state_tracker: ResMut<ResourceStateTracker>,
     ray_tracing_pipeline: Option<Res<RayTracingPipeline>>,
     tlas: Option<Res<Tlas>>,
+    mesh_info_buffer: Res<MeshInfoBuffer>,
     camera: Query<(&Camera, &Transform), With<Camera>>,
 ) -> Result<(), BevyError> {
     let Some(ray_tracing_pipeline) = ray_tracing_pipeline else {
@@ -144,6 +145,7 @@ fn execute_ray_tracing_pipeline(
         render_context.command_buffer,
         &mut resource_state_tracker,
         &tlas,
+        &mesh_info_buffer,
         camera_transform,
         camera.vertical_fov(),
     );
@@ -178,6 +180,7 @@ impl RayTracingPipeline {
         command_buffer: vk::CommandBuffer,
         tracker: &mut ResourceStateTracker,
         tlas: &Tlas,
+        mesh_info_buffer: &MeshInfoBuffer,
         camera_transform: &Transform,
         camera_fov: f32,
     ) {
@@ -193,6 +196,21 @@ impl RayTracingPipeline {
                     .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
                     .descriptor_count(1)
                     .push_next(&mut acceleration_structure_info)],
+                &[],
+            );
+
+            let descriptor_buffer_info = vk::DescriptorBufferInfo::default()
+                .buffer(mesh_info_buffer.buffer.buffer)
+                .offset(0)
+                .range(vk::WHOLE_SIZE);
+
+            self.render_device.device.update_descriptor_sets(
+                &[vk::WriteDescriptorSet::default()
+                    .dst_set(self.descriptor_set)
+                    .dst_binding(2)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .buffer_info(std::slice::from_ref(&descriptor_buffer_info))],
                 &[],
             );
         }
@@ -479,6 +497,13 @@ impl<'a> RayTracingPipelineBuilder<'a> {
                     .descriptor_type(vk::DescriptorType::ACCELERATION_STRUCTURE_KHR)
                     .descriptor_count(1)
                     .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(2)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .descriptor_count(1)
+                    .stage_flags(
+                        vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+                    ),
             ];
 
             let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::default()
