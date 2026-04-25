@@ -6,8 +6,6 @@ use bevy::ecs::{
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum RenderSystems {
     Prepare,
-    PrepareAssets,
-    PrepareRayTracing,
     Queue,
     QueueRayTracing,
     QueueUi,
@@ -37,15 +35,6 @@ impl Render {
                 RenderSystems::Submit,
             )
                 .chain(),
-        );
-
-        schedule.configure_sets(
-            (
-                RenderSystems::PrepareAssets,
-                RenderSystems::PrepareRayTracing,
-            )
-                .chain()
-                .in_set(RenderSystems::Prepare),
         );
 
         schedule.configure_sets(

@@ -8,7 +8,7 @@ use super::{
     blas::Blas,
     buffer::Buffer,
     mesh::GpuMesh,
-    render_asset::RenderAssets,
+    render_asset::{RenderAssets, sync_render_assets},
     render_device::RenderDevice,
     render_queue::RenderQueue,
     schedule::{Render, RenderSystems},
@@ -18,7 +18,12 @@ pub struct TlasPlugin;
 
 impl Plugin for TlasPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Render, build_tlas.in_set(RenderSystems::PrepareRayTracing));
+        app.add_systems(
+            Render,
+            build_tlas
+                .in_set(RenderSystems::Prepare)
+                .after(sync_render_assets::<GpuMesh>),
+        );
     }
 }
 

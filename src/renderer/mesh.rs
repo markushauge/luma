@@ -28,7 +28,7 @@ impl Plugin for MeshPlugin {
             .add_systems(RenderStartup, create_mesh_info_buffer)
             .add_systems(
                 Render,
-                sync_render_assets::<GpuMesh>.in_set(RenderSystems::PrepareAssets),
+                sync_render_assets::<GpuMesh>.in_set(RenderSystems::Prepare),
             );
     }
 }
