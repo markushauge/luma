@@ -1,7 +1,9 @@
-pub mod acceleration_structure;
+mod blas;
 mod buffer;
 pub mod egui_renderer;
+mod mesh;
 pub mod ray_tracing;
+mod render_asset;
 mod render_context;
 mod render_device;
 mod render_queue;
@@ -10,6 +12,7 @@ mod schedule;
 mod shader;
 mod storage_image;
 mod swapchain;
+mod tlas;
 
 use anyhow::Result;
 use bevy::{

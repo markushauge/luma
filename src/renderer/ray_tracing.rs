@@ -8,14 +8,15 @@ use crate::camera::Camera;
 
 use super::{
     RenderDevice,
-    acceleration_structure::{AccelerationStructurePlugin, Tlas},
     buffer::Buffer,
+    mesh::MeshPlugin,
     render_context::RenderContext,
     resource_state_tracker::{ImageState, ResourceStateTracker},
     schedule::{Render, RenderSystems},
     shader::Shader,
     storage_image::StorageImage,
     swapchain::Swapchain,
+    tlas::{Tlas, TlasPlugin},
 };
 
 #[derive(Default)]
@@ -26,7 +27,7 @@ pub struct RayTracingPlugin {
 impl Plugin for RayTracingPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(self.settings.clone())
-            .add_plugins(AccelerationStructurePlugin)
+            .add_plugins((TlasPlugin, MeshPlugin))
             .add_systems(Startup, load_shaders)
             .add_systems(
                 Render,

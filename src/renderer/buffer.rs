@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 
 use anyhow::{Result, anyhow};
 use ash::vk;
+use bevy::prelude::*;
 use bytemuck::Pod;
 use gpu_allocator::{
     MemoryLocation,
@@ -10,7 +11,6 @@ use gpu_allocator::{
 
 use super::render_device::RenderDevice;
 
-#[derive(Default)]
 #[expect(dead_code)]
 pub struct Buffer<T = u8> {
     pub len: u64,
@@ -21,6 +21,21 @@ pub struct Buffer<T = u8> {
     pub address: vk::DeviceAddress,
     pub name: String,
     _marker: PhantomData<T>,
+}
+
+impl<T> Default for Buffer<T> {
+    fn default() -> Self {
+        Self {
+            len: default(),
+            size: default(),
+            usage: default(),
+            buffer: default(),
+            allocation: default(),
+            address: default(),
+            name: default(),
+            _marker: default(),
+        }
+    }
 }
 
 impl RenderDevice {
