@@ -260,22 +260,8 @@ impl RayTracingPipeline {
         swapchain_image_extent: vk::Extent2D,
     ) {
         tracker
-            .transition_image(
-                self.storage_image.image,
-                ImageState {
-                    layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    access: vk::AccessFlags2::TRANSFER_READ,
-                    stages: vk::PipelineStageFlags2::TRANSFER,
-                },
-            )
-            .transition_image(
-                swapchain_image,
-                ImageState {
-                    layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    access: vk::AccessFlags2::TRANSFER_WRITE,
-                    stages: vk::PipelineStageFlags2::TRANSFER,
-                },
-            )
+            .transition_image(self.storage_image.image, ImageState::transfer_src())
+            .transition_image(swapchain_image, ImageState::transfer_dst())
             .flush(&self.render_device, command_buffer);
 
         let subresource = vk::ImageSubresourceLayers {

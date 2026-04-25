@@ -79,10 +79,48 @@ pub struct ImageState {
 
 impl Default for ImageState {
     fn default() -> Self {
+        Self::undefined()
+    }
+}
+
+impl ImageState {
+    pub fn undefined() -> Self {
         Self {
             layout: vk::ImageLayout::UNDEFINED,
             access: vk::AccessFlags2::empty(),
             stages: vk::PipelineStageFlags2::empty(),
+        }
+    }
+
+    pub fn present() -> Self {
+        Self {
+            layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            access: vk::AccessFlags2::empty(),
+            stages: vk::PipelineStageFlags2::empty(),
+        }
+    }
+
+    pub fn color_attachment() -> Self {
+        Self {
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            stages: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+        }
+    }
+
+    pub fn transfer_src() -> Self {
+        Self {
+            layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            access: vk::AccessFlags2::TRANSFER_READ,
+            stages: vk::PipelineStageFlags2::TRANSFER,
+        }
+    }
+
+    pub fn transfer_dst() -> Self {
+        Self {
+            layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            access: vk::AccessFlags2::TRANSFER_WRITE,
+            stages: vk::PipelineStageFlags2::TRANSFER,
         }
     }
 }

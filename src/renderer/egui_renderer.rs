@@ -201,14 +201,7 @@ impl EguiRenderer {
         let swapchain_image = swapchain.current_image();
 
         tracker
-            .transition_image(
-                swapchain_image.image,
-                ImageState {
-                    access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                    layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    stages: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                },
-            )
+            .transition_image(swapchain_image.image, ImageState::color_attachment())
             .flush(&self.render_device, render_context.command_buffer);
 
         let rendering_attachment_info = vk::RenderingAttachmentInfo::default()

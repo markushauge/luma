@@ -12,7 +12,6 @@ mod storage_image;
 mod swapchain;
 
 use anyhow::Result;
-use ash::vk;
 use bevy::{
     ecs::system::SystemId,
     prelude::*,
@@ -140,7 +139,6 @@ fn begin(
 
     let swapchain_image = swapchain.current_image();
     resource_state_tracker.track_image(swapchain_image.image);
-
     Ok(false)
 }
 
@@ -154,14 +152,7 @@ fn end(
     let swapchain_image = swapchain.current_image();
 
     resource_state_tracker
-        .transition_image(
-            swapchain_image.image,
-            ImageState {
-                layout: vk::ImageLayout::PRESENT_SRC_KHR,
-                access: vk::AccessFlags2::empty(),
-                stages: vk::PipelineStageFlags2::empty(),
-            },
-        )
+        .transition_image(swapchain_image.image, ImageState::present())
         .flush(&render_device, render_context.command_buffer);
 
     render_context.end_frame(&render_device, &render_queue, swapchain_image.semaphore)?;
