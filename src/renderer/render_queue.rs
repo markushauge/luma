@@ -47,4 +47,13 @@ impl RenderQueue {
                 .queue_submit(self.queue, &[submit_info], fence)
         }
     }
+
+    pub fn wait_idle(&self) {
+        unsafe {
+            self.render_device
+                .device
+                .queue_wait_idle(self.queue)
+                .expect("Failed while waiting for queue to become idle");
+        }
+    }
 }

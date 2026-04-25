@@ -328,7 +328,7 @@ impl RenderDevice {
                 vk::Fence::null(),
             )?;
 
-            self.device.queue_wait_idle(render_queue.queue)?;
+            render_queue.wait_idle();
             self.device.destroy_command_pool(command_pool, None);
             self.destroy_buffer(scratch_buffer);
 
@@ -540,7 +540,7 @@ impl RenderDevice {
                 vk::Fence::null(),
             )?;
 
-            self.device.queue_wait_idle(render_queue.queue)?;
+            render_queue.wait_idle();
             self.device.destroy_command_pool(command_pool, None);
             self.destroy_buffer(scratch_buffer);
 
