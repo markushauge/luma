@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use ash::vk;
-use bevy::prelude::*;
+use bevy::{math::Affine3A, prelude::*};
 use bytemuck::{Pod, Zeroable};
 use gpu_allocator::MemoryLocation;
 
@@ -35,9 +35,9 @@ fn build_tlas(
     gpu_meshes: Res<RenderAssets<GpuMesh>>,
     tlas: Option<ResMut<Tlas>>,
     mut asset_events: MessageReader<AssetEvent<Mesh>>,
-    mesh3ds: Query<(&Transform, &Mesh3d)>,
+    mesh3ds: Query<(&GlobalTransform, &Mesh3d)>,
     changed_mesh3ds: Query<(), Changed<Mesh3d>>,
-    changed_transforms: Query<(), (Changed<Transform>, With<Mesh3d>)>,
+    changed_transforms: Query<(), (Changed<GlobalTransform>, With<Mesh3d>)>,
     removed_mesh3ds: RemovedComponents<Mesh3d>,
 ) -> Result<(), BevyError> {
     let build_tlas = tlas.is_none()
@@ -60,7 +60,7 @@ fn build_tlas(
             Some(BlasInstance {
                 mesh_index: mesh.mesh_index,
                 blas: &mesh.blas,
-                transform: *transform,
+                transform: transform.affine(),
             })
         })
         .collect();
@@ -73,7 +73,7 @@ fn build_tlas(
 pub struct BlasInstance<'a> {
     pub mesh_index: u32,
     pub blas: &'a Blas,
-    pub transform: Transform,
+    pub transform: Affine3A,
 }
 
 #[repr(C)]
@@ -86,11 +86,10 @@ unsafe impl Zeroable for AccelerationStructureInstance {}
 
 impl From<&BlasInstance<'_>> for AccelerationStructureInstance {
     fn from(instance: &BlasInstance) -> Self {
-        let affine = instance.transform.compute_affine();
-        let x_axis = affine.x_axis;
-        let y_axis = affine.y_axis;
-        let z_axis = affine.z_axis;
-        let w_axis = affine.w_axis;
+        let x_axis = instance.transform.x_axis;
+        let y_axis = instance.transform.y_axis;
+        let z_axis = instance.transform.z_axis;
+        let w_axis = instance.transform.w_axis;
 
         let transform = vk::TransformMatrixKHR {
             matrix: [
