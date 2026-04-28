@@ -15,7 +15,6 @@ use super::render_queue::RenderQueue;
 #[derive(Resource, Clone, Deref)]
 pub struct RenderDevice(Arc<RenderDeviceInner>);
 
-#[expect(dead_code)]
 pub struct RenderDeviceInner {
     pub entry: ash::Entry,
     pub instance: ash::Instance,

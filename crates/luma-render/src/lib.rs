@@ -1,5 +1,6 @@
 mod blas;
 mod buffer;
+pub mod camera;
 pub mod egui_renderer;
 mod mesh;
 pub mod ray_tracing;

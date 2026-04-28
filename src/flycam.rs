@@ -15,57 +15,17 @@ const GAMEPAD_TRIGGER_DEADZONE: f32 = 0.01;
 const GAMEPAD_MOVE_SENSITIVITY: f32 = 5.0;
 const GAMEPAD_LOOK_SENSITIVITY: f32 = 100.0;
 
-pub struct CameraPlugin;
+pub struct FlycamPlugin;
 
-impl Plugin for CameraPlugin {
+impl Plugin for FlycamPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, (update_transform, update_transform_gamepad))
             .add_systems(Update, update_cursor_grab);
     }
 }
 
-pub struct Sensor {
-    pub width: f32,
-    pub height: f32,
-}
-
-impl Sensor {
-    /// 35mm full-frame sensor
-    pub const FULL_FRAME: Self = Self {
-        width: 36.0,
-        height: 24.0,
-    };
-
-    #[expect(dead_code)]
-    pub fn horizontal_fov(&self, focal_length: f32) -> f32 {
-        2.0 * (self.width / (2.0 * focal_length)).atan()
-    }
-
-    pub fn vertical_fov(&self, focal_length: f32) -> f32 {
-        2.0 * (self.height / (2.0 * focal_length)).atan()
-    }
-}
-
 #[derive(Component)]
-pub struct Camera {
-    pub sensor: Sensor,
-    pub focal_length: f32,
-}
-
-impl Camera {
-    pub fn vertical_fov(&self) -> f32 {
-        self.sensor.vertical_fov(self.focal_length)
-    }
-}
-
-impl Default for Camera {
-    fn default() -> Self {
-        Self {
-            sensor: Sensor::FULL_FRAME,
-            focal_length: 24.0,
-        }
-    }
-}
+pub struct Flycam;
 
 fn update_transform(
     window: Query<&Window, With<PrimaryWindow>>,
@@ -73,7 +33,7 @@ fn update_transform(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut messages: MessageReader<MouseMotion>,
-    mut query: Query<&mut Transform, With<Camera>>,
+    mut query: Query<&mut Transform, With<Flycam>>,
 ) {
     let Ok(window) = window.single() else {
         return;
@@ -135,7 +95,7 @@ fn update_transform(
 fn update_transform_gamepad(
     gamepads: Query<&Gamepad>,
     time: Res<Time>,
-    mut query: Query<&mut Transform, With<Camera>>,
+    mut query: Query<&mut Transform, With<Flycam>>,
 ) {
     let Ok(mut transform) = query.single_mut() else {
         return;

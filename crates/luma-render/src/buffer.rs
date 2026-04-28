@@ -11,7 +11,6 @@ use gpu_allocator::{
 
 use super::render_device::RenderDevice;
 
-#[expect(dead_code)]
 pub struct Buffer<T = u8> {
     pub len: u64,
     pub size: u64,

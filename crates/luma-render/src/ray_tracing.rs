@@ -1,6 +1,8 @@
+use std::borrow::Cow;
+
 use anyhow::{Result, anyhow};
 use ash::vk;
-use bevy::prelude::*;
+use bevy::{asset::AssetPath, prelude::*};
 use bytemuck::{Pod, Zeroable};
 use gpu_allocator::MemoryLocation;
 
@@ -19,14 +21,15 @@ use super::{
     tlas::{Tlas, TlasPlugin},
 };
 
-#[derive(Default)]
 pub struct RayTracingPlugin {
+    pub shaders: RayTracingShaders,
     pub settings: RayTracingSettings,
 }
 
 impl Plugin for RayTracingPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(self.settings.clone())
+        app.insert_resource(self.shaders.clone())
+            .insert_resource(self.settings.clone())
             .add_plugins((TlasPlugin, MeshPlugin))
             .add_systems(Startup, load_shaders)
             .add_systems(
@@ -52,18 +55,29 @@ impl Default for RayTracingSettings {
     }
 }
 
+#[derive(Resource, Clone)]
+pub struct RayTracingShaders {
+    pub raygen: Cow<'static, str>,
+    pub miss: Cow<'static, str>,
+    pub closest_hit: Cow<'static, str>,
+}
+
 #[derive(Resource)]
-struct RayTracingShaders {
+struct RayTracingShaderHandles {
     raygen: Handle<Shader>,
     miss: Handle<Shader>,
     closest_hit: Handle<Shader>,
 }
 
-fn load_shaders(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.insert_resource(RayTracingShaders {
-        raygen: asset_server.load("shaders/raygen.slang"),
-        miss: asset_server.load("shaders/miss.slang"),
-        closest_hit: asset_server.load("shaders/closest-hit.slang"),
+fn load_shaders(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    shaders: Res<RayTracingShaders>,
+) {
+    commands.insert_resource(RayTracingShaderHandles {
+        raygen: asset_server.load(AssetPath::parse(&shaders.raygen)),
+        miss: asset_server.load(AssetPath::parse(&shaders.miss)),
+        closest_hit: asset_server.load(AssetPath::parse(&shaders.closest_hit)),
     });
 }
 
@@ -75,7 +89,7 @@ fn create_or_update_ray_tracing_pipeline(
     mut resource_state_tracker: ResMut<ResourceStateTracker>,
     ray_tracing_pipeline: Option<ResMut<RayTracingPipeline>>,
     settings: Res<RayTracingSettings>,
-    ray_tracing_shaders: Res<RayTracingShaders>,
+    ray_tracing_shaders: Res<RayTracingShaderHandles>,
     assets: Res<Assets<Shader>>,
     mut asset_events: MessageReader<AssetEvent<Shader>>,
 ) -> Result<(), BevyError> {
@@ -147,7 +161,7 @@ fn execute_ray_tracing_pipeline(
         &tlas,
         &mesh_info_buffer,
         camera_transform,
-        camera.vertical_fov(),
+        camera.sensor.vertical_fov(camera.focal_length),
     );
 
     ray_tracing_pipeline.blit(

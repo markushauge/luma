@@ -2310,6 +2310,18 @@ name = "luma"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bevy",
+ "egui",
+ "luma-render",
+ "native-dialog",
+ "tracing",
+]
+
+[[package]]
+name = "luma-render"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "ash",
  "ash-window",
  "bevy",
@@ -2318,7 +2330,6 @@ dependencies = [
  "egui-ash-renderer",
  "egui-winit",
  "gpu-allocator",
- "native-dialog",
  "raw-window-handle",
  "serde",
  "tracing",

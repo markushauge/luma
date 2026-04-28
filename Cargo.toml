@@ -3,31 +3,22 @@ name = "luma"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["crates/*"]
+
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
 
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0.102"
-ash = "0.38.0"
-ash-window = "0.13.0"
-bytemuck = { version = "1.25.0", features = ["derive"] }
-egui = "0.33.3"
-egui-ash-renderer = { version = "0.11.0", features = [
-    "dynamic-rendering",
-    "gpu-allocator",
-] }
-egui-winit = "0.33.3"
-native-dialog = "0.9.6"
-raw-window-handle = "0.6.2"
 serde = "1.0.228"
 tracing = "0.1.44"
+egui = "0.33.3"
 
-[dependencies.bevy]
-default-features = false
-features = [
+bevy = { version = "0.18.1", default-features = false, features = [
     "bevy_asset",
     "bevy_gilrs",
     "bevy_log",
@@ -37,10 +28,14 @@ features = [
     "bevy_winit",
     "debug",
     "file_watcher",
-]
-version = "0.18.1"
+] }
 
-[dependencies.gpu-allocator]
-default-features = false
-features = ["std", "vulkan"]
-version = "0.28.0"
+[dependencies]
+luma-render = { path = "crates/luma-render" }
+
+anyhow = { workspace = true }
+bevy = { workspace = true }
+egui = { workspace = true }
+tracing = { workspace = true }
+
+native-dialog = "0.9.6"

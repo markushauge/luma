@@ -1,20 +1,18 @@
-mod camera;
+mod flycam;
 mod panic;
-mod renderer;
 
 use bevy::{
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     prelude::*,
 };
-
-use crate::{
-    camera::{Camera, CameraPlugin},
-    renderer::{
-        RendererPlugin,
-        egui_renderer::{EguiContext, EguiPass, EguiPassSystems, EguiPlugin},
-        ray_tracing::RayTracingPlugin,
-    },
+use luma_render::{
+    RendererPlugin,
+    camera::Camera,
+    egui_renderer::{EguiContext, EguiPass, EguiPassSystems, EguiPlugin},
+    ray_tracing::{RayTracingPlugin, RayTracingShaders},
 };
+
+use crate::flycam::{Flycam, FlycamPlugin};
 
 fn main() -> AppExit {
     panic::init_hook();
@@ -29,9 +27,16 @@ fn main() -> AppExit {
         }))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .add_plugins(RendererPlugin)
-        .add_plugins(CameraPlugin)
-        .add_plugins(RayTracingPlugin::default())
+        .add_plugins(RayTracingPlugin {
+            shaders: RayTracingShaders {
+                raygen: "shaders/raygen.slang".into(),
+                miss: "shaders/miss.slang".into(),
+                closest_hit: "shaders/closest-hit.slang".into(),
+            },
+            settings: default(),
+        })
         .add_plugins(EguiPlugin)
+        .add_plugins(FlycamPlugin)
         .add_systems(Startup, setup)
         .add_systems(EguiPass, render_ui.in_set(EguiPassSystems::Render))
         .run()
@@ -40,6 +45,7 @@ fn main() -> AppExit {
 fn setup(mut commands: Commands, mut assets: ResMut<Assets<Mesh>>) {
     commands.spawn((
         Camera::default(),
+        Flycam,
         Transform::from_xyz(0.0, 10.0, 20.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
