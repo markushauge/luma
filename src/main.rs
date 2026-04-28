@@ -1,4 +1,5 @@
 mod flycam;
+mod gltf;
 mod panic;
 
 use bevy::{
@@ -12,7 +13,10 @@ use luma_render::{
     ray_tracing::{RayTracingPlugin, RayTracingShaders},
 };
 
-use crate::flycam::{Flycam, FlycamPlugin};
+use crate::{
+    flycam::{Flycam, FlycamPlugin},
+    gltf::GltfPlugin,
+};
 
 fn main() -> AppExit {
     panic::init_hook();
@@ -37,6 +41,7 @@ fn main() -> AppExit {
         })
         .add_plugins(EguiPlugin)
         .add_plugins(FlycamPlugin)
+        .add_plugins(GltfPlugin)
         .add_systems(Startup, setup)
         .add_systems(EguiPass, render_ui.in_set(EguiPassSystems::Render))
         .run()

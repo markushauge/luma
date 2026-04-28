@@ -38,4 +38,5 @@ bevy = { workspace = true }
 egui = { workspace = true }
 tracing = { workspace = true }
 
+gltf = "1.4.1"
 native-dialog = "0.9.6"
