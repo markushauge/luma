@@ -19,7 +19,7 @@ use anyhow::Result;
 use bevy::{
     ecs::system::SystemId,
     prelude::*,
-    window::{PrimaryWindow, RawHandleWrapper},
+    window::{ExitSystems, PrimaryWindow, RawHandleWrapper},
 };
 use render_context::RenderContext;
 use render_device::RenderDevice;
@@ -41,7 +41,7 @@ impl Plugin for RendererPlugin {
                 (setup_renderer, run_render_startup_schedule).chain(),
             )
             .add_systems(Update, (recreate_swapchain, render).chain())
-            .add_systems(Last, on_app_exit);
+            .add_systems(Last, on_app_exit.after(ExitSystems));
     }
 }
 
