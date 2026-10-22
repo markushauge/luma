@@ -13,10 +13,10 @@ opt-level = 1
 opt-level = 3
 
 [workspace.dependencies]
-anyhow = "1.0.102"
-serde = "1.0.228"
+anyhow = "1.0.104"
+serde = "1.0.229"
 tracing = "0.1.44"
-egui = "0.33.3"
+egui = "0.36.2"
 
 bevy = { version = "0.20.0", default-features = false, features = [
     "bevy_asset",
@@ -38,4 +38,4 @@ bevy = { workspace = true }
 egui = { workspace = true }
 tracing = { workspace = true }
 
-native-dialog = "0.9.6"
+native-dialog = "0.9.7"

@@ -133,7 +133,7 @@ fn end(
 pub struct EguiRenderer {
     pub render_device: RenderDevice,
     pub context: egui::Context,
-    pub renderer: egui_ash_renderer::Renderer,
+    pub renderer: egui_ash_renderer::Renderer<egui_ash_renderer::allocator::GpuAllocator>,
     pub textures_to_free: Vec<egui::TextureId>,
 }
 
@@ -142,12 +142,13 @@ impl EguiRenderer {
         let dynamic_rendering = egui_ash_renderer::DynamicRendering {
             color_attachment_format: vk::Format::B8G8R8A8_UNORM,
             depth_attachment_format: None,
+            stencil_attachment_format: None,
         };
 
         let renderer = egui_ash_renderer::Renderer::with_gpu_allocator(
             render_device.allocator.clone(),
             render_device.device.clone(),
-            dynamic_rendering,
+            egui_ash_renderer::RenderMode::DynamicRendering(dynamic_rendering),
             default(),
         )?;
 
@@ -162,9 +163,8 @@ impl EguiRenderer {
     }
 
     pub fn begin(&mut self, raw_input: egui::RawInput) -> Result<()> {
-        if !self.textures_to_free.is_empty() {
-            self.renderer.free_textures(&self.textures_to_free)?;
-            self.textures_to_free.clear();
+        for texture_id in self.textures_to_free.drain(..) {
+            self.renderer.free_texture(texture_id)?;
         }
 
         self.context.begin_pass(raw_input);
@@ -179,22 +179,25 @@ impl EguiRenderer {
         tracker: &mut ResourceStateTracker,
     ) -> Result<()> {
         let egui::FullOutput {
-            textures_delta,
+            mut textures_delta,
             shapes,
             pixels_per_point,
             ..
         } = self.context.end_pass();
 
         if !textures_delta.free.is_empty() {
-            self.textures_to_free.extend(textures_delta.free);
+            self.textures_to_free.extend(textures_delta.free.drain());
         }
 
-        if !textures_delta.set.is_empty() {
-            self.renderer.set_textures(
-                render_queue.queue,
-                render_context.command_pool,
-                &textures_delta.set,
-            )?;
+        for (texture_id, deltas) in textures_delta.set.drain() {
+            for delta in deltas {
+                self.renderer.set_texture(
+                    render_queue.queue,
+                    render_context.command_pool,
+                    texture_id,
+                    &delta,
+                )?;
+            }
         }
 
         let clipped_primitives = self.context.tessellate(shapes, pixels_per_point);
