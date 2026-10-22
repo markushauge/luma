@@ -75,7 +75,7 @@ impl Swapchain {
             }
 
             let surface_extent = match surface_capabilities.current_extent.width {
-                std::u32::MAX => vk::Extent2D { width, height },
+                u32::MAX => vk::Extent2D { width, height },
                 _ => surface_capabilities.current_extent,
             };
 
